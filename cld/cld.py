@@ -201,12 +201,35 @@ Reasoning: {reasoning}'"""
 
 Respond in the following JSON format:"""}]
         context[0]['content'] += '\n{"answers" : "[1,2,3,or 4 depending on your reasoning]", "reasoning": "[your reasoning behind your answer]"}'
-        corrected_response = get_completion_from_messages(context,response_format=True)
-        corrected_response = get_json(corrected_response)
-        try:
-            steps = extract_numbers(corrected_response["answers"])
-        except TypeError:
-            steps = extract_numbers(str(corrected_response["answers"]))
+        # Use response_format=False for Ollama so we can robustly parse non-OpenAI JSON replies
+        if USE_OLLAMA:
+            raw = get_completion_from_messages(context, response_format=False)
+            # try to parse JSON out of the raw response
+            corrected_response = get_json(raw)
+            if corrected_response is None or "answers" not in corrected_response:
+                # fallback: extract digit answers directly from text
+                numbers = extract_numbers(raw)
+                steps = [n for n in numbers if n in ("1","2","3","4")]
+                # if none found, try to find bracketed list like [1,2]
+                if not steps:
+                    m = re.search(r"\[\s*([1-4](?:\s*,\s*[1-4])*)\s*\]", raw)
+                    if m:
+                        steps = re.findall(r"[1-4]", m.group(1))
+                # get reasoning text if present
+                m2 = re.search(r'reasoning\s*[:\-]*\s*(.+)', raw, re.IGNORECASE|re.DOTALL)
+                reasoning_text = m2.group(1).strip() if m2 else ''
+            else:
+                try:
+                    steps = extract_numbers(corrected_response["answers"])
+                except TypeError:
+                    steps = extract_numbers(str(corrected_response["answers"]))
+        else:
+            corrected_response = get_completion_from_messages(context,response_format=True)
+            corrected_response = get_json(corrected_response)
+            try:
+                steps = extract_numbers(corrected_response["answers"])
+            except TypeError:
+                steps = extract_numbers(str(corrected_response["answers"]))
         if "1" in steps or "2" in steps:
             correct_ans = var1 +" -->(+) "+var2
         elif "3" in steps or "4" in steps:
@@ -361,8 +384,43 @@ Please ensure that you follow the above JSON output format."""}]
 
         context.append({'role': 'user', 'content':prompt})
         corrected_response = get_completion_from_messages(context)
+        # Debug: when using Ollama, print raw response to help troubleshoot parsing
+        try:
+            if USE_OLLAMA:
+                print(MAGENTA+"DEBUG_RAW_CORRECTED_RESPONSE:"+RESET)
+                print(corrected_response)
+        except NameError:
+            # USE_OLLAMA is defined in utils; if not imported into this namespace, ignore
+            pass
         corrected_response = get_json(corrected_response)
-        relationships = corrected_response["Step 2"]["Final Relationships"]
+        # The expected format is a dict with "Step 2" -> { "Final Relationships": [...] }
+        # But some model backends (e.g., Ollama) may return a flat numbered dict like {"1": {...}, ...}.
+        # Handle both formats.
+        if corrected_response is None:
+            print(RED+"Got no corrected response from the assistant."+RESET)
+            sys.exit(1)
+
+        if "Step 2" in corrected_response:
+            relationships = corrected_response["Step 2"]["Final Relationships"]
+        else:
+            # Try to convert a flat numbered dict into the expected list format
+            try:
+                numbered_keys = sorted([k for k in corrected_response.keys()], key=lambda x: int(re.findall(r"\d+", x)[0]) if re.findall(r"\d+", x) else x)
+            except Exception:
+                numbered_keys = list(corrected_response.keys())
+
+            relationships = []
+            for k in numbered_keys:
+                entry = corrected_response[k]
+                # normalize common key names
+                rel = entry.get("causal relationship") or entry.get("relationship") or entry.get("causal_relationship")
+                rel = rel if rel is not None else entry.get("causal relationship")
+                reasoning = entry.get("reasoning")
+                relevant = entry.get("relevant text") or entry.get("relevant_text") or entry.get("relevant text")
+                # If the entry already matches the expected dict structure used later, try to pass it through
+                relationships.append({"relationship": rel.lower() if isinstance(rel, str) else rel, "relevant text": relevant, "reasoning": reasoning})
+            # Replace corrected_response with a normalized structure so later code (which expects "Step 1" and "Step 2") works
+            corrected_response = {"Step 1": {"pairs": []}, "Step 2": {"Final Relationships": relationships}}
         if self.verbose:
             merges = corrected_response["Step 1"]["pairs"]
             for line in merges:

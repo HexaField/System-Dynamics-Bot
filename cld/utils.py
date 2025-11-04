@@ -7,6 +7,8 @@ import openai
 import re
 import numpy as np
 import sys 
+import requests
+import json
 
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
@@ -31,43 +33,112 @@ BLUE = '\033[94m'
 DARK_GREEN = '\033[32m'
 RESET = '\033[0m'  # Reset to default color
 
+# Determine which LLM provider to use. By default use OpenAI. Set USE_OLLAMA=1 or OLLAMA_URL to enable Ollama.
+USE_OLLAMA = bool(os.environ.get("USE_OLLAMA")) or bool(os.environ.get("OLLAMA_URL"))
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+
 try:
     api_key = os.environ.get("OPENAI_API_KEY")
 except Exception as e:
     print(f"Something unexpected happened with your API key: {e}")
     sys.exit()
 
-client = openai.OpenAI(api_key= api_key)
+openai_client = None
+if not USE_OLLAMA:
+    # Standard OpenAI client
+    openai_client = openai.OpenAI(api_key= api_key)
 
 
-@backoff.on_exception(backoff.expo, (openai.RateLimitError, openai.APIConnectionError, openai.Timeout), max_tries=20, logger=backoff_logger)
+@backoff.on_exception(backoff.expo, (openai.RateLimitError, openai.APIConnectionError, openai.Timeout, requests.exceptions.RequestException), max_tries=20, logger=backoff_logger)
 def get_completion_from_messages(messages, model="gpt-4-1106-preview", response_format = False, temperature=0):
+    """Get a chat completion from the configured LLM provider.
+
+    - By default uses OpenAI via the official client.
+    - If USE_OLLAMA is set (or OLLAMA_URL), it will call the Ollama HTTP API on OLLAMA_URL.
+    """
     try:
-        if not response_format:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature
-            )
-            return response.choices[0].message.content
+        if USE_OLLAMA:
+            # Ollama expects model and messages in a simple JSON format.
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature
+            }
+            resp = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            # Try several common response shapes
+            if isinstance(data, dict):
+                # Ollama typically returns {'id':..., 'choices':[{'message':{'role':'assistant','content':'...'}}]}
+                choices = data.get("choices") or data.get("response") or data.get("outputs")
+                if choices and isinstance(choices, list):
+                    first = choices[0]
+                    # nested message
+                    if isinstance(first, dict):
+                        msg = first.get("message") or first.get("output") or first
+                        if isinstance(msg, dict):
+                            content = msg.get("content") or msg.get("text")
+                            if content is not None:
+                                return content
+                        # fallback: string content
+                        content = first.get("content") or first.get("text")
+                        if content is not None:
+                            return content
+                # fallback to top-level text fields
+                if "text" in data:
+                    return data["text"]
+                if "output" in data:
+                    out = data["output"]
+                    if isinstance(out, list):
+                        parts = []
+                        for o in out:
+                            if isinstance(o, dict):
+                                parts.append(o.get("content") or o.get("text") or "")
+                            else:
+                                parts.append(str(o))
+                        return "\n".join([p for p in parts if p])
+            # As a last resort, return the raw JSON
+            return json.dumps(data)
+
         else:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                response_format={"type": "json_object"}
-            )
-            return response.choices[0].message.content
+            # OpenAI via official client
+            if not response_format:
+                response = openai_client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature
+                )
+                return response.choices[0].message.content
+            else:
+                response = openai_client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    response_format={"type": "json_object"}
+                )
+                return response.choices[0].message.content
 
     except Exception as e:
         logging.error(f"Something unexpected happened. Error: {e}")
         raise
 
-@backoff.on_exception(backoff.expo, (openai.RateLimitError, openai.APIConnectionError, openai.Timeout), max_tries=20, logger=backoff_logger)
+@backoff.on_exception(backoff.expo, (openai.RateLimitError, openai.APIConnectionError, openai.Timeout, requests.exceptions.RequestException), max_tries=20, logger=backoff_logger)
 def get_embedding(text, model="text-embedding-3-small"):
     text = text.replace("\n", " ")
-    embeddings = client.embeddings.create(input = [text], model=model)
-    return embeddings.data[0].embedding
+    if USE_OLLAMA:
+        # Ollama embeddings API (if available) -- POST /api/embeddings
+        payload = {"model": model, "input": [text]}
+        resp = requests.post(f"{OLLAMA_URL}/api/embeddings", json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        # Expecting {'data':[{'embedding': [...]}, ...]}
+        if isinstance(data, dict) and data.get("data"):
+            return data["data"][0].get("embedding")
+        raise RuntimeError("Unexpected embeddings response from Ollama: %s" % (data,))
+
+    else:
+        embeddings = openai_client.embeddings.create(input = [text], model=model)
+        return embeddings.data[0].embedding
 
 def clean_up(text):
     numbered_list = re.findall(r'\d+\..*?(?=\n\s*\d+\.|\Z)', text, re.DOTALL)
