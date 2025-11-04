@@ -51,7 +51,54 @@ Remember that this environment variable exists only during this session so you h
 
 ## Running the System Dynamics Bot
 
-You can run the System Dynamics Bot by navigating to the cld folder and running `python main.py --arg1 --arg2`. 
+## Quickstart
+
+Minimal steps to get the project running (macOS/Linux):
+
+1. Create and activate a virtual environment, then install Python deps:
+
+```bash
+cd /path/to/System-Dynamics-Bot
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+```
+
+2. Choose your model backend:
+- Use Ollama (local LLM) — recommended if you run `ollama` locally:
+
+```bash
+export USE_OLLAMA=1
+export OLLAMA_URL="http://localhost:11434"   # change if your Ollama HTTP port differs
+```
+
+- Or use OpenAI (remote API):
+
+```bash
+export USE_OLLAMA=0
+export OPENAI_API_KEY="sk-..."
+```
+
+3. Run the bot interactively from the `cld` folder:
+
+```bash
+cd cld
+python main.py --verbose
+```
+
+Tip: If you want the bot to generate a diagram, add `--diagram` and ensure Graphviz + `pygraphviz` are installed on your system.
+
+If you prefer an automated helper, run the included `setup.sh` which creates the venv, installs packages, and can optionally pull the `gpt-oss:20b` model for Ollama:
+
+```bash
+./setup.sh --skip-ollama   # create venv + install Python deps but don't install/pull Ollama
+./setup.sh                # attempt to install/pull Ollama (Homebrew on macOS)
+```
+
+## Running the System Dynamics Bot
+
+You can run the System Dynamics Bot by navigating to the cld folder and running `python main.py --arg1 --arg2`.
 
 The list of arguments are given below:
 
