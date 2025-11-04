@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { generateCausalLoopDiagram } from '../src/sage'
-import * as utils from '../dist/utils'
 
 describe('GreatSage.think', () => {
   beforeEach(() => {
@@ -9,6 +7,9 @@ describe('GreatSage.think', () => {
 
   it('writes relationships, xmile and dot when flags set', async () => {
     const sampleText = 'When death rate goes up, population decreases.'
+
+    // Require the built utils so we can mock functions used by the built sage
+    const utils = require('../dist/utils')
 
     vi.spyOn(utils, 'getEmbedding').mockResolvedValue(new Array(8).fill(1))
 
@@ -20,6 +21,8 @@ describe('GreatSage.think', () => {
       }
     })
     vi.spyOn(utils, 'getCompletionFromMessages').mockResolvedValueOnce(response1).mockResolvedValueOnce('{}')
+
+    const { generateCausalLoopDiagram } = require('../dist/sage')
 
     const res = await generateCausalLoopDiagram({
       verbose: false,

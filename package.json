@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "rollup -c",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "format": "prettier --write .",
@@ -26,10 +26,14 @@
     "openai": "^6.8.0"
   },
   "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-typescript": "^12.3.0",
     "@types/inquirer": "^9.0.9",
     "@types/node": "^24.10.0",
     "prettier": "^3.6.2",
     "prettier-plugin-organize-imports": "^4.3.0",
+    "rollup": "^4.52.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "vitest": "^4.0.7"

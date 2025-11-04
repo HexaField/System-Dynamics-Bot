@@ -26,7 +26,6 @@ const shouldRun = Boolean(process.env.RUN_OLLAMA_E2E) && Boolean(process.env.USE
     const result = await generateCausalLoopDiagram({
       verbose: false,
       diagram: false,
-      write_relationships: false,
       xmile: false,
       threshold: 0.85,
       question: largePrompt
@@ -39,6 +38,44 @@ const shouldRun = Boolean(process.env.RUN_OLLAMA_E2E) && Boolean(process.env.USE
     expect(result.response.length).toBeGreaterThan(0)
     expect(Array.isArray(result.lines)).toBe(true)
     expect(result.lines.length).toBeGreaterThan(0)
+
+    // Normalize lines for robust matching
+    const norm = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/["'()\.,]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    const parsed = result.lines.map((l: string) => {
+      const parts = l.split('-->')
+      return {
+        raw: l,
+        left: parts[0] ? norm(parts[0]) : '',
+        right: parts[1] ? norm(parts[1]) : ''
+      }
+    })
+
+    // Expected causal pairs implied by the prompt. We'll accept fuzzy matches (substring checks).
+    const expectedPairs: Array<[string, string]> = [
+      ['gap between work remaining', 'schedule pressure'],
+      ['schedule pressure', 'overtime'],
+      ['overtime', 'completion rate'],
+      ['overtime', 'fatigue'],
+      ['fatigue', 'productivity']
+    ]
+
+    let found = 0
+    for (const [causeSub, effectSub] of expectedPairs) {
+      const ok = parsed.some(
+        (p: { left: string; right: string }) => p.left.includes(causeSub) && p.right.includes(effectSub)
+      )
+      if (ok) found++
+    }
+
+    // Require that the model produced most of the expected causal links (tolerate 1 missing)
+    expect(found).toBeGreaterThanOrEqual(expectedPairs.length - 1)
+
+    console.log('test finished')
   },
   120000
 )

@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import CLD from '../dist/cld'
-import * as utils from '../dist/utils'
 
 describe('CLD.generateCausalRelationships', () => {
   beforeEach(() => {
@@ -10,9 +8,12 @@ describe('CLD.generateCausalRelationships', () => {
   it('parses model JSON response and returns numbered relationships', async () => {
     const sampleText = 'When death rate goes up, population decreases.'
 
+    // Require the built utils so we can mock functions used by the built CLD
+    const utils = require('../dist/utils')
+
     // Mock embedding to deterministic small vectors
+    // @ts-ignore
     vi.spyOn(utils, 'getEmbedding').mockImplementation(async (text: string) => {
-      // return different embeddings depending on length to allow getLine to pick a sentence
       const len = text.length
       return new Array(8).fill(0).map((_, i) => (i === 0 ? len : 1))
     })
@@ -27,6 +28,9 @@ describe('CLD.generateCausalRelationships', () => {
     })
 
     vi.spyOn(utils, 'getCompletionFromMessages').mockResolvedValueOnce(response1).mockResolvedValueOnce('{}')
+
+    // Now require the built CLD after mocks are in place so the built module picks up the mocked utils
+    const CLD = require('../dist/cld').default
 
     const cld = new CLD(sampleText, 0.85, false)
     const output = await cld.generateCausalRelationships()
