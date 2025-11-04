@@ -1,0 +1,37 @@
+{
+  "name": "system-dynamics-bot",
+  "version": "0.1.0",
+  "description": "System Dynamics Bot — TypeScript CLI rewrite",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "format": "prettier --write .",
+    "test": "npm run build && vitest run",
+    "e2e": "npm run build && USE_OLLAMA=1 OLLAMA_URL=\"http://localhost:11434\" RUN_OLLAMA_E2E=1 vitest run"
+  },
+  "bin": {
+    "sdbot": "dist/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.13.2",
+    "commander": "^14.0.2",
+    "dotenv": "^17.2.3",
+    "inquirer": "^12.10.0",
+    "openai": "^6.8.0"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^9.0.9",
+    "@types/node": "^24.10.0",
+    "prettier": "^3.6.2",
+    "prettier-plugin-organize-imports": "^4.3.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.7"
+  }
+}

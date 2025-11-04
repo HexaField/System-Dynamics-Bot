@@ -1,146 +1,8 @@
-# System Dynamics Bot (TypeScript)
-
-A compact, TypeScript-first rewrite of the System Dynamics Bot. The tool extracts causal relationships from text and optionally generates causal loop diagram artifacts. This README explains how to install, run, test, and programmatically call the TypeScript API and CLI.
-
-## Highlights
-
-- CLI and programmatic TypeScript API
-- Supports local Ollama HTTP backend or OpenAI (remote)
-- Choose chat (LLM) and embedding models per-run (flags or programmatic options)
-- Unit tests (Vitest) and an opt-in E2E test that calls a local Ollama instance
-
-## Quick install
-
-Node 18+ and npm are recommended.
-
-1. Install dependencies:
-
-```bash
-cd /path/to/System-Dynamics-Bot
-npm install
-npm run build
-```
-
-2. Optional: run tests
-
-```bash
-# unit tests only
-npm test
-
-# run opt-in Ollama E2E (set USE_OLLAMA=1, RUN_OLLAMA_E2E=1 and OLLAMA_URL)
-USE_OLLAMA=1 OLLAMA_URL=http://localhost:11434 RUN_OLLAMA_E2E=1 npm test
-```
-
-## Environment
-
-- USE_OLLAMA (1/true or empty) — prefer local Ollama HTTP API when truthy
-- OLLAMA_URL — default: `http://localhost:11434`
-- OLLAMA_CHAT_MODEL — default used for Ollama chat if not specified programmatically
-- OLLAMA_EMBEDDING_MODEL — default used for Ollama embeddings if not specified programmatically
-- OPENAI_API_KEY — required if `USE_OLLAMA` is false and you want to use OpenAI
-
-The code will prefer programmatic model names passed to the API. If not provided, it falls back to env vars and then sensible defaults.
-
-## CLI Usage
-
-After building, the CLI entrypoint is `dist/index.js` (package.json also provides a `sdbot` bin). Example:
-
-```bash
-# interactive (will open an editor to enter the problem description)
-npx ts-node src/index.ts
-
-# read input from file and save XMILE + DOT
-npx ts-node src/index.ts -i my_text.txt -x -d --llm-model gpt-oss:20b --embedding-model bge-m3:latest
-
-# short flags
-npx ts-node src/index.ts --input=my_text.txt --diagram --xmile --llm-model=gpt-oss:20b
-```
-
-CLI flags (important ones):
-
-- `-v, --verbose` — enable internal logging
-- `-d, --diagram` — generate DOT diagram
-- `-w, --write-relationships` — write relationships.txt
-- `-x, --xmile` — produce XMILE file
-- `-t, --threshold <n>` — embedding similarity threshold (default 0.85)
-- `--llm-model <model>` — override chat/LLM model for this run (preferred)
-- `--embedding-model <model>` — override embedding model for this run (preferred)
-- `-i, --input <file>` — read the input text from file
-
-If you omit `--llm-model` or `--embedding-model`, the code will try environment variables and then built-in defaults.
-
-## Programmatic API (TypeScript)
-
-Import and call the exported `GreatSage` class. It returns a structured result (no direct file I/O) so callers can decide what to save.
-
-Example:
-
-```ts
-import GreatSage from './dist/sage'
-
-const sage = new GreatSage({
-  verbose: false,
-  diagram: true,
-  xmile: true,
-  write_relationships: true,
-  threshold: 0.85,
-  question: 'Engineers compare the work remaining to be done against the time remaining before the deadline...',
-  // Optional: prefer using local Ollama models for this run
-  llmModel: 'gpt-oss:20b',
-  embeddingModel: 'bge-m3:latest'
-})
-
-const result = await sage.think()
-console.log(result.response) // numbered relationships
-console.log(result.lines) // array of individual relationship strings
-if (result.xmile) writeFileSync('diagram.xmile', result.xmile)
-if (result.dot) writeFileSync('diagram.dot', result.dot)
-```
-
-Constructor options (key fields):
-
-- `question` (string) — required text to analyze
-- `threshold` (number) — similarity threshold (default 0.85)
-- `llmModel` (string, optional) — chat model name to use this run (overrides env)
-- `embeddingModel` (string, optional) — embedding model name to use this run (overrides env)
-- `verbose`, `diagram`, `xmile`, `write_relationships` — behavior toggles
-
-Return value of `think()` (object):
-
-- `response` (string) — the numbered relationships output
-- `lines` (string[]) — deduplicated relationship strings
-- `xmile` (string | undefined) — XMILE XML when requested
-- `dot` (string | undefined) — Graphviz DOT diagram when requested
-
-## Ollama vs OpenAI
-
-- If `USE_OLLAMA` is set, the library will call the local Ollama HTTP API. It tries to be lenient about endpoint shapes and supports both `/api/chat` and `/api/generate` (fallback).
-- When using Ollama, prefer passing model names programmatically or via `OLLAMA_CHAT_MODEL` and `OLLAMA_EMBEDDING_MODEL` environment vars.
-- If `USE_OLLAMA` is not set, the code will use OpenAI via `OPENAI_API_KEY`.
-
-## Tests
-
-- Unit tests: `npm test` (Vitest)
-- Opt-in E2E test that hits a local Ollama instance: set `USE_OLLAMA=1`, `OLLAMA_URL`, and `RUN_OLLAMA_E2E=1`.
-
-## Troubleshooting
-
-- If the E2E test fails with a 404, ensure your Ollama server is running and that the chosen model supports chat (or pass a chat-capable model with `--llm-model`).
-- If embeddings appear empty from Ollama, set an explicit `--embedding-model` pointing to a model that provides embeddings (for example `bge-m3:latest`).
-
-## Contributing
-
-Open issues or PRs for bugs, improvements, or documentation fixes.
-
----
-
-If you want, I can also add a short quickstart script that pulls recommended Ollama models and runs the opt-in E2E locally.
-
 # From Text to Map: A System Dynamics Bot for Constructing Causal Loop Diagrams
 
 This repository includes the code and supplementary materials for the paper: **From Text to Map: A System Dynamics Bot for Constructing Causal Loop Diagrams** ([arXiv link](https://arxiv.org/abs/2402.11400)) ([Paper](https://doi.org/10.1002/sdr.1782))
 
-> **Abstract:** We introduce and test the System Dynamics Bot, a computer program leveraging a large language model to automate the creation of causal loop diagrams from textual data. To evaluate its performance, we ensembled two distinct databases. The first dataset includes 20 causal loop diagrams and associated texts sourced from system dynamics literature. The second dataset comprises responses from 30 participants to the Lake Urmia Vignette, along with causal loop diagrams coded by three system dynamics modelers. The bot uses textual data and successfully identifies approximately sixty percent of the links between variables and feedback loops in both datasets. This paper outlines our approach, provides examples, and presents evaluation results. We discuss encountered challenges and implemented solutions in developing the System Dynamics Bot. The Bot can facilitate extracting mental models from textual data and improve model building processes. Moreover, the two datasets can serve as a testbed for similar programs.
+> **Abstract:** We introduce and test the System Dynamics Bot, a computer program leveraging a large language model to automate the creation of causal loop diagrams from textual data. To evaluate its performance, we ensembled two distinct databases. The first dataset includes 20 causal loop diagrams and associated texts sourced from system dynamics literature. The second dataset comprises responses from 30 participants to the Lake Urmia Vignette, along with causal loop diagrams coded by three system dynamics modelers. The bot uses textual data and successfully identifies approximately sixty percent of the links between variables and feedback loops in both datasets. This paper outlines our approach, provides examples, and presents evaluation results.
 
 An OpenAI API key is required to use this application. A user can [create an account](https://platform.openai.com/login) with OpenAI, navigate to the [API key page](https://platform.openai.com/account/api-keys) and click on "Create new secret key", optionally naming the key. Make sure that you have [GPT-4 access](https://help.openai.com/en/articles/7102672-how-can-i-access-gpt-4), and **save your API key somewhere safe and do not share it with anyone.**
 
@@ -182,7 +44,7 @@ Set your OpenAI API key as your environment variable. You can do this easily by 
 
 ### Step 1. Install Graphviz
 
-Unix based systems already have C++ and Python installed, so you can skip those installation processes. You can install Graphviz by running `sudo apt-get install graphviz graphviz-dev`. As before, please ensure that Graphviz installation directory is on PATH. In Linux systems, it usually gets added to PATH by default.
+Unix based systems already have C++ and Python installed, so you can skip those installation processes. You can install Graphviz by running `sudo apt-get install graphviz graphviz-dev`. As before, please ensure Graphviz installation directory is on PATH. In Linux systems, it usually gets added to PATH by default.
 
 ### Step 2. Install Required Python Packages
 
@@ -255,7 +117,7 @@ The list of arguments are given below:
 
 If you use this code, please cite the following:
 
-Hosseinichimeh, N., Majumdar, A., Williams, R., & Ghaffarzadegan, N. (2024). From Text to Map: A System Dynamics Bot for Constructing Causal Loop Diagrams. ArXiv, abs/2402.11400.
+Hosseinichimeh, N., Majumdar, A., Williams, R., & Ghaffarzadegan, N. (2024). From Text to Map: a System Dynamics Bot for Constructing Causal Loop Diagrams. ArXiv, abs/2402.11400.
 
 ```bibtex
 @article{https://doi.org/10.1002/sdr.1782,
@@ -269,7 +131,6 @@ doi = {https://doi.org/10.1002/sdr.1782},
 url = {https://onlinelibrary.wiley.com/doi/abs/10.1002/sdr.1782},
 eprint = {https://onlinelibrary.wiley.com/doi/pdf/10.1002/sdr.1782},
 abstract = {Abstract We introduce and test the System Dynamics Bot, a computer program leveraging a large language model to automate the creation of causal loop diagrams from textual data. To evaluate its performance, we ensembled two distinct databases. The first dataset includes 20 causal loop diagrams and associated texts sourced from the system dynamics literature. The second dataset comprises responses from 30 participants to a vignette, along with causal loop diagrams coded by three system dynamics modelers. The bot uses textual data and successfully identifies approximately 60\% of the links between variables and feedback loops in both datasets. This article outlines our approach, provides examples, and presents evaluation results. We discuss encountered challenges and implemented solutions in developing the System Dynamics Bot. The bot can facilitate extracting mental models from textual data and improve model-building processes. Moreover, the two datasets can serve as a test-bed for similar programs. © 2024 The Author(s). System Dynamics Review published by John Wiley \& Sons Ltd on behalf of System Dynamics Society.}
-}
 ```
 
 ## Questions

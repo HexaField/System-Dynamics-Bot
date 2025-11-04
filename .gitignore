@@ -1,3 +1,9 @@
+node_modules/
+.env
+dist/
+.venv/
+*.log
+*.pyc
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
