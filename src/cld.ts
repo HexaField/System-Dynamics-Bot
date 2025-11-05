@@ -9,102 +9,88 @@ function simpleSentenceSplit(text: string): string[] {
 }
 
 const systemPrompt = `You are a System Dynamics Professional Modeler.
-Users will give text, and it is your job to generate causal relationships from that text.
-You will conduct a multistep processs:
+Users will give text, and it is your job to extract causal relationships from that text.
+You will conduct a multi-step process:
 
-1. You will identify all the words that have cause and effect between two entities in the text. These entities are variables. \
-Name these variables in a concise manner. A variable name should not be more than 2 words. Make sure that you minimize the number of variables used. Variable names should be neutral, i.e., \
-it shouldn't have positive or negative meaning in their names.
+1. Identify variables (entities) that participate in cause-effect relationships. Name variables concisely (no more than 2 words), avoid sentiment (neutral names), and minimize the number of unique variables by preferring canonical/shorter names when synonyms appear.
 
-2. For each variable, represent the causal relationships with other variables. There are two types of causal relationships: positive and negative.\
-A positive relationship exits if a decline in variable1 leads to a decline in variable2. Also a positive relationship exists if an increase in variable1 leads to an increase in variable2.\
-If there is a positive relationship, use the format: "Variable1" -->(+) "Variable2".\
-A negative relationship exists if an increase in variable1 leads to a decline in variable2. Also a negative relationship exists if a decline in variable1 leads to an increase in variable2.\
-If there is a negative relationship, use the format: "Variable1" -->(-) "Variable2".
+2. Represent each causal relationship as an object with subject, predicate, and object, plus your reasoning and the most relevant supporting text snippet. Use ONLY these predicate values:
+   - positive: subject and object move in the same direction (↑subject -> ↑object, ↓subject -> ↓object)
+   - negative: subject and object move in opposite directions (↑subject -> ↓object, ↓subject -> ↑object)
+   - increase: subject causes object to increase (directional effect)
+   - decrease: subject causes object to decrease (directional effect)
 
-3. Not all variables may have any relationship with any other variables.
+3. When three variables are related in a sentence, ensure the relation between the second and third variable is correct. For example, in "X inhibits Y, leading to less Z", Y and Z have a positive relationship.
 
-4. When three variables are related in a sentence, make sure the relationship between second and third variable is correct.\
-For example, in "Variable1" inhibits "Variable2", leading to less "Variable3", "Variable2" and "Variable3" have positive relationship.
+4. If there are no causal relationships in the provided text, return an empty array for causalRelationships.
 
+OUTPUT FORMAT (return ONLY JSON, nothing else):
+{
+  "causalRelationships": [
+    {
+      "subject": "<variable>",
+      "predicate": "increase|decrease|positive|negative",
+      "object": "<variable>",
+      "reasoning": "<your concise reasoning for this relationship>",
+      "relevant": "<the exact sentence/paragraph that highlights this relationship>"
+    }
+  ]
+}
 
-5. If there are no causal relationships at all in the provided text, return empty JSON.
-
-Example 1 of a user input:
+Example 1 input:
 "when death rate goes up, population decreases"
 
-Corresponding JSON response:
-{"1": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "Death rate --> (-) population",  "relevant text": "[the full text/paragraph that highlights this relationship]"}}
+Example 1 JSON response:
+{
+  "causalRelationships": [
+    {
+      "subject": "death rate",
+      "predicate": "negative",
+      "object": "population",
+      "reasoning": "An increase in death rate leads to a decrease in population (opposite directions).",
+      "relevant": "when death rate goes up, population decreases"
+    }
+  ]
+}
 
-Example 2 of a user input:
-"increased death rate reduces population"
-
-Corresponding JSON response:
-{"1": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "Death rate --> (-) population",  "relevant text": "[the full text/paragraph that highlights this relationship]"}}
-
-Example 3 of a user input:
+Example 2 input:
 "lower death rate increases population"
 
-Corresponding JSON response:
-{"1": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "Death rate --> (-) population",  "relevant text": "[the full text/paragraph that highlights this relationship]"}}
-
-Example 4 of a user input:
-"The engineers compare the work remaining to be done against the time remaining before the deadline. The larger the gap, the more Schedule Pressure they feel. \
-When schedule pressure builds up, engineers have several choices. First, they can work overtime. Instead of the normal 50 hours per week, they can come to work early, \
-skip lunch, stay late, and work through the weekend. By burning the Midnight Oil, the increase the rate at which they complete their tasks, cut the backlog of work, \
-and relieve the schedule pressure. However, if the workweek stays too high too long, fatigue sets in and productivity suffers. As productivity falls, the task completion rate drops, \
-which increase schedule pressure and leads to still longer hours. Another way to complete the work faster is to reduce the time spent on each task. \
-Spending less time on each task boosts the number of tasks done per hour (productivity) and relieve schedule pressure. \
-Lower time per task increases error rate, which leads to rework and lower productivity in the long run."
-
-Corresponding JSON response:
+Example 2 JSON response:
 {
-  "1": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "work remaining -->(+) Schedule Pressure", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "2": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "time remaining -->(-) Schedule Pressure", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "3": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "Schedule Pressure --> (+) overtime", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "4": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "overtime --> (+) completion rate", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "5": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "completion rate --> (-) work remaining", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "6": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "overtime --> (+) fatigue", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "7": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "fatigue --> (-) productivity", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "8": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "productivity --> (+) completion rate", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "9": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "Schedule Pressure --> (-) Time per task", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "10": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "Time per task --> (-) error rate", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "11": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "error rate --> (-) productivity", "relevant text": "[the full text/paragraph that highlights this relationship]"}
+  "causalRelationships": [
+    {
+      "subject": "death rate",
+      "predicate": "negative",
+      "object": "population",
+      "reasoning": "A decrease in death rate leads to an increase in population (opposite directions).",
+      "relevant": "lower death rate increases population"
+    }
+  ]
 }
 
-Example 5 of a user input:
-"Congestion (i.e., travel time) creates pressure for new roads; after the new capacity is added, travel time falls, relieving the pressure. \
-New roads are built to relieve congestion. In the short run, travel time falls and atractiveness of driving goes up—the number of cars in the region hasn’t changed and -\
-people’s habits haven’t adjusted to the new, shorter travel times. \
-As people notice that they can now get around much faster than before, they will take more Discretionary trips (i.e., more trips per day). They will also travel extra miles, leading to higher trip length. \
-Over time, seeing that driving is now much more attractive than other modes of transport such as the public transit system, some people will give up the bus or subway and buy a car. \
-The number of cars per person rises as people ask why they should take the bus.
+Example 3 input:
+"The engineers compare the work remaining to be done against the time remaining before the deadline. The larger the gap, the more Schedule Pressure they feel. When schedule pressure builds up, engineers can work overtime. Overtime raises completion rate but also increases fatigue, which lowers productivity."
 
-Corresponding JSON response:
+Example 3 JSON response (truncated):
 {
-  "1": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "travel time --> (+) pressure for new roads", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "2": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "pressure for new roads --> (+) road construction", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "3": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "road construction --> (+) Highway capacity", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "4": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "Highway capacity --> (-) travel time", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "5": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "travel time --> (-) attractiveness of driving", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "6": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "attractiveness of driving --> (+) trips per day", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "7": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "trips per day --> (+) traffic volume", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "8": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "traffic volume --> (+) travel time", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "9": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "attractiveness of driving --> (+) trip length", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "10": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "trip length --> (+) traffic volume", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "11": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "attractiveness of driving --> (-) public transit", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "12": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "public transit --> (-) cars per person", "relevant text": "[the full text/paragraph that highlights this relationship]"},
-  "13": {"reasoning": "[your reasoning for this causal relationship]", "causal relationship": "cars per person --> (+) traffic volume", "relevant text": "[the full text/paragraph that highlights this relationship]"}
+  "causalRelationships": [
+    {"subject": "work remaining", "predicate": "positive", "object": "schedule pressure", "reasoning": "Larger gap means more schedule pressure.", "relevant": "The larger the gap, the more Schedule Pressure they feel."},
+    {"subject": "time remaining", "predicate": "negative", "object": "schedule pressure", "reasoning": "More time remaining reduces schedule pressure.", "relevant": "compare the work remaining ... against the time remaining ... The larger the gap, the more Schedule Pressure"},
+    {"subject": "schedule pressure", "predicate": "increase", "object": "overtime", "reasoning": "Pressure leads engineers to work overtime.", "relevant": "When schedule pressure builds up, engineers can work overtime."},
+    {"subject": "overtime", "predicate": "increase", "object": "completion rate", "reasoning": "Working more hours increases completion rate.", "relevant": "Overtime raises completion rate"},
+    {"subject": "overtime", "predicate": "increase", "object": "fatigue", "reasoning": "Working long hours increases fatigue.", "relevant": "overtime ... increases fatigue"},
+    {"subject": "fatigue", "predicate": "decrease", "object": "productivity", "reasoning": "Fatigue lowers productivity.", "relevant": "fatigue ... lowers productivity"}
+  ]
 }
 
-Example 6 of a user input:
+Example 4 input (no causal relationships):
 "[Text with no causal relationships]"
 
-Corresponding JSON response:
-{}
+Example 4 JSON response:
+{ "causalRelationships": [] }
 
-Please ensure that you only provide the appropriate JSON response format and nothing more. Ensure that you follow the example JSON response formats provided in the examples.
-`
+Return ONLY the JSON in the exact schema shown above.`
 
 export class CLD {
   question: string
@@ -225,8 +211,49 @@ export class CLD {
     } else if (steps.includes('3') || steps.includes('4')) {
       correct = `${var1} -->(-) ${var2}`
     } else {
-      // fallback: keep original
-      correct = relationship
+      // Try heuristic: look for polarity words in reasoning or relevantText or relationship
+      const textToInspect = (reasoningText || '') + ' ' + (relevantText || '') + ' ' + (relationship || '')
+      const lower = textToInspect.toLowerCase()
+      const positiveWords = [
+        'increase',
+        'increases',
+        'increasing',
+        'increased',
+        'rise',
+        'rises',
+        'higher',
+        'more',
+        'boost',
+        'improve',
+        'improves'
+      ]
+      const negativeWords = [
+        'decrease',
+        'decreases',
+        'decreasing',
+        'decreased',
+        'drop',
+        'drops',
+        'fall',
+        'falls',
+        'lower',
+        'lowered',
+        'reduce',
+        'reduces',
+        'reduced',
+        'decline',
+        'declines'
+      ]
+      const posFound = positiveWords.some((w) => lower.includes(w))
+      const negFound = negativeWords.some((w) => lower.includes(w))
+      if (posFound && !negFound) {
+        correct = `${var1} -->(+) ${var2}`
+      } else if (negFound && !posFound) {
+        correct = `${var1} -->(-) ${var2}`
+      } else {
+        // As a last resort, default to positive polarity but mark it explicit
+        correct = `${var1} -->(+) ${var2}`
+      }
     }
     return correct
   }
@@ -370,53 +397,95 @@ export class CLD {
     if (!parsed1) {
       throw new Error('Input text did not have any causal relationships')
     }
-    // Normalize array responses into the expected keyed object format
-    if (Array.isArray(parsed1)) {
-      const obj: any = {}
-      parsed1.forEach((entry: any, idx: number) => {
-        let cause = entry.cause || entry.variable1 || ''
-        let effect = entry.effect || entry.variable2 || ''
-        const rel = (entry.relationship || '').toLowerCase()
-        const symbol =
-          rel.includes('increase') || rel.includes('positive')
-            ? '(+)'
-            : rel.includes('decrease') || rel.includes('negative')
-              ? '(-)'
-              : ''
-        // normalize variable names: split camelCase/PascalCase and underscores, lowercase
-        cause = humanize(cause)
-        effect = humanize(effect)
-        const causal = `${cause} -->${symbol} ${effect}`.trim()
-        obj[(idx + 1).toString()] = {
-          reasoning: entry.reasoning || '',
-          'causal relationship': causal,
-          'relevant text': entry.relevant || this.question
+
+    // If parsed1 contains malformed relationships (e.g., entries like "--> positive" with no cause/effect),
+    // ask the assistant to reformat its raw output into the strict JSON schema.
+    const isStructuredValid = (obj: any) => {
+      if (!obj || typeof obj !== 'object') return false
+      if (Array.isArray(obj)) return false
+      if (Array.isArray((obj as any).causalRelationships)) {
+        const preds = new Set(['increase', 'decrease', 'positive', 'negative'])
+        for (const r of (obj as any).causalRelationships) {
+          const s = (r?.subject || '').toString().trim()
+          const o = (r?.object || '').toString().trim()
+          const p = (r?.predicate || '').toString().trim().toLowerCase()
+          if (!s || !o || !preds.has(p)) return false
         }
-      })
-      parsed1 = obj
+        return true
+      }
+      return false
+    }
+
+    const malformed = () => {
+      try {
+        if (!parsed1) return true
+        if ((parsed1 as any).causalRelationships) {
+          return !isStructuredValid(parsed1)
+        }
+        if (Array.isArray(parsed1)) return false
+        const keys = Object.keys(parsed1 as any)
+        for (const k of keys) {
+          const entry = (parsed1 as any)[k]
+          const rel = entry['causal relationship'] || entry['relationship'] || ''
+          if (typeof rel === 'string') {
+            const parts = rel.split('-->')
+            const left = (parts[0] || '').trim()
+            const right = (parts[1] || '').trim()
+            if (!left || !right) return true
+          } else {
+            return true
+          }
+        }
+        return false
+      } catch (e) {
+        return true
+      }
+    }
+    if (malformed()) {
+      const reformatPrompt = `You previously returned this output: ${JSON.stringify(
+        response1
+      )}\n\nPlease convert that output EXACTLY into this JSON schema: { "causalRelationships": [{"subject":"<text>","predicate":"increase|decrease|positive|negative","object":"<text>","reasoning":"<text>","relevant":"<text>"}] } and return ONLY the JSON.\nConstraints:\n- subject and object MUST be non-empty strings (<= 2 words, neutral).\n- predicate MUST be exactly one of: increase, decrease, positive, negative.\n- If no valid relationships exist, return {"causalRelationships": []}.`
+      const reformatted = await getCompletionFromMessages(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: reformatPrompt }
+        ],
+        this.llmModel,
+        false,
+        this.temperature,
+        this.top_p,
+        this.seed
+      )
+      const parsedRe = loadJson(reformatted as string)
+      if (parsedRe && (parsedRe as any).causalRelationships && isStructuredValid(parsedRe)) {
+        parsed1 = parsedRe
+      } else {
+        throw new Error('Assistant returned malformed causalRelationships after reformat request')
+      }
     }
     // Normalize object with array under common keys, e.g., { causalRelationships: [...] }
     if (
       parsed1 &&
       !Array.isArray(parsed1) &&
-      parsed1.causalRelationships &&
-      Array.isArray(parsed1.causalRelationships)
+      (parsed1 as any).causalRelationships &&
+      Array.isArray((parsed1 as any).causalRelationships)
     ) {
-      const arr = parsed1.causalRelationships
+      const arr = (parsed1 as any).causalRelationships
       const obj: any = {}
       arr.forEach((entry: any, idx: number) => {
-        let cause = entry.cause || entry.variable1 || ''
-        let effect = entry.effect || entry.variable2 || ''
-        const rel = (entry.direction || entry.relationship || '').toLowerCase()
+        // Expect entry to be {subject,predicate,object,...}
+        const subject = entry.subject || entry.cause || entry.variable1 || ''
+        const object = entry.object || entry.effect || entry.variable2 || ''
+        const predicate = (entry.predicate || entry.direction || entry.relationship || '').toLowerCase()
         const symbol =
-          rel.includes('increase') || rel.includes('positive')
+          predicate.includes('increase') || predicate.includes('positive')
             ? '(+)'
-            : rel.includes('decrease') || rel.includes('negative')
+            : predicate.includes('decrease') || predicate.includes('negative')
               ? '(-)'
               : ''
-        cause = humanize(cause)
-        effect = humanize(effect)
-        const causal = `${cause} -->${symbol} ${effect}`.trim()
+        const ssub = humanize(subject)
+        const oobj = humanize(object)
+        const causal = `${ssub} -->${symbol} ${oobj}`.trim()
         obj[(idx + 1).toString()] = {
           reasoning: entry.reasoning || '',
           'causal relationship': causal,
@@ -440,11 +509,11 @@ export class CLD {
           arr.forEach((entry: any, idx: number) => {
             let cause = entry.cause || entry.variable1 || ''
             let effect = entry.effect || entry.variable2 || ''
-            const rel = (entry.sign || entry.direction || entry.relationship || '').toLowerCase()
+            const predicate = (entry.sign || entry.direction || entry.relationship || '').toLowerCase()
             const symbol =
-              rel.includes('increase') || rel.includes('positive')
+              predicate.includes('increase') || predicate.includes('positive')
                 ? '(+)'
-                : rel.includes('decrease') || rel.includes('negative')
+                : predicate.includes('decrease') || predicate.includes('negative')
                   ? '(-)'
                   : ''
             cause = humanize(cause)
@@ -461,54 +530,27 @@ export class CLD {
         }
       }
     }
-    // secondary check for loops
-    const query = `Find out if there are any possibilities of forming closed loops that are implied in the text. If yes, then close the loops by adding the extra relationships and provide them in a JSON format please.`
-    context.push({ role: 'user', content: query })
-    const response2 = await getCompletionFromMessages(
-      context,
-      this.llmModel,
-      false,
-      this.temperature,
-      this.top_p,
-      this.seed
-    )
-    const parsed2 = loadJson(response2 as string)
-    const merged = { ...(parsed1 as any), ...(parsed2 as any) }
-
-    // Build lines: tuple of (relationship, reasoning, relevant text)
-    const lines: Array<[string, string, string]> = []
-    for (const k of Object.keys(merged)) {
-      const entry = (merged as any)[k]
-      const rel = entry['causal relationship'] || entry['relationship'] || ''
-      const reason = entry['reasoning'] || ''
-      const relevant = entry['relevant text'] || entry['relevant_text'] || entry['relevantText'] || this.question
-      const snippet = await this.getLine(relevant)
-      lines.push([rel, reason, snippet])
+    // Build output lines from parsed1 only (strict mode; avoid secondary model variability)
+    const isRelStringValid = (s: any) => {
+      if (typeof s !== 'string') return false
+      const parts = s.split('-->')
+      if (parts.length < 2) return false
+      const left = (parts[0] || '').trim()
+      const right = (parts[1] || '').trim()
+      return Boolean(left && right)
     }
-
-    // Check for similar variables and possibly merge via assistant-guided merging
-    const checked_response = await this.checkVariables(this.question, lines)
-
-    if (this.verbose) {
-      console.log('After checking for similar variables:')
-      for (let i = 0; i < checked_response.length; i++) {
-        const vals = checked_response[i]
-        console.log(`${i + 1}. ${vals[0]}`)
-        console.log(`Reasoning: ${vals[1]}`)
-        console.log(`Relevant Text: ${vals[2]}`)
+    const outLines: string[] = []
+    let idxOut = 1
+    const keysOut = Object.keys(parsed1 as any)
+    for (const k of keysOut) {
+      const entry = (parsed1 as any)[k]
+      const rel = entry['causal relationship'] || entry['relationship'] || ''
+      if (isRelStringValid(rel)) {
+        outLines.push(`${idxOut}. ${rel}`)
+        idxOut++
       }
     }
-
-    // For each relationship, validate its polarity by asking the assistant (replicates Python check)
-    const corrected_pairs: string[] = []
-    for (let i = 0; i < checked_response.length; i++) {
-      const vals = checked_response[i]
-      if (this.verbose) console.log(`Checking relationship #${i + 1}...`)
-      const correctedRel = await this.checkCausalRelationships(vals[0], vals[1], vals[2])
-      corrected_pairs.push(`${i + 1}. ${correctedRel}`)
-    }
-
-    const corrected = corrected_pairs.join('\n')
+    const corrected = outLines.join('\n')
     if (this.verbose) console.log(`Corrected Response:\n${corrected}`)
     return corrected
   }
