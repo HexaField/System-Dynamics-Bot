@@ -14,6 +14,9 @@ program
   .option('-t, --threshold <n>', 'similarity threshold', parseFloat, 0.85)
   .option('--llm-model <model>', 'LLM/chat model to use (overrides OLLAMA_CHAT_MODEL)')
   .option('--embedding-model <model>', 'Embedding model to use (overrides OLLAMA_EMBEDDING_MODEL)')
+  .option('--seed <n>', 'random seed for deterministic runs', (v) => Number(v))
+  .option('--temperature <n>', 'LLM temperature', parseFloat)
+  .option('--top_p <n>', 'LLM top_p', parseFloat)
   .option('-i, --input <file>', 'read input text from file')
   .parse(process.argv)
 
@@ -41,6 +44,10 @@ async function main() {
     question,
     llmModel: opts.llmModel,
     embeddingModel: opts.embeddingModel
+    ,
+    temperature: opts.temperature !== undefined ? Number(opts.temperature) : undefined,
+    top_p: opts.top_p !== undefined ? Number(opts.top_p) : undefined,
+    seed: opts.seed !== undefined ? Number(opts.seed) : undefined
   })
 
   if (result) {

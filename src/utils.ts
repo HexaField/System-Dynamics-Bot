@@ -17,27 +17,19 @@ export async function getCompletionFromMessages(
   messages: any[],
   model?: string,
   responseFormat = false,
-  temperature = 0
+  temperature = 0,
+  top_p = 1,
+  seed: number | null = Number(process.env.SEED) || 42
 ) {
   if (USE_OLLAMA) {
     // prefer an explicit model argument first, then env var fallback
-    const chatModel = model || process.env.OLLAMA_CHAT_MODEL || 'gpt-oss:20b'
-    const payload = { model: chatModel, messages, temperature }
-    let resp
-    try {
-      resp = await axios.post(`${OLLAMA_URL}/api/chat`, payload, {
-        timeout: 120000
-      })
-    } catch (err: any) {
-      // If Ollama instance doesn't expose /api/chat for this model, try /api/generate as a fallback
-      if (err && err.response && err.response.status === 404) {
-        resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, {
-          timeout: 120000
-        })
-      } else {
-        throw err
-      }
-    }
+    // Use Ollama /api/generate only (no fallbacks). This enforces we use the real model endpoint
+    // and fail fast if it's not available. Consumers must run a compatible Ollama model.
+  const chatModel = model || process.env.OLLAMA_CHAT_MODEL || 'llama3.1:8b'
+    const payload: any = { model: chatModel, messages, temperature, top_p }
+    // include seed for deterministic runs when supported by the local model
+    if (seed !== null && seed !== undefined) payload.seed = seed
+    const resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, { timeout: 120000 })
     const data = resp.data
     // Ollama often streams NDJSON. Handle string streaming output by parsing lines.
     if (typeof data === 'string') {
@@ -76,7 +68,8 @@ export async function getCompletionFromMessages(
     const response = await openaiClient.chat.completions.create({
       model: chosen,
       messages,
-      temperature
+      temperature,
+      top_p
     })
     return response.choices[0].message.content
   }
@@ -106,8 +99,10 @@ export async function getEmbedding(text: string, model?: string) {
     if (data && Array.isArray(data.embedding) && data.embedding.length) {
       return data.embedding
     }
-    // If Ollama returned empty embeddings (some setups), fall back to deterministic local embedding
-    return hashEmbedding(clean)
+    // If Ollama returned empty embeddings, fail — do not fall back to local pseudo-embeddings.
+    throw new Error(
+      `Embeddings API returned no embedding for model ${embedModel}. Ensure the model supports embeddings and Ollama is configured correctly.`
+    )
   } else {
     if (!openaiClient) throw new Error('OpenAI API key not set')
     const chosen = model || 'text-embedding-3-small'

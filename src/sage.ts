@@ -9,6 +9,9 @@ type SageOpts = {
   question?: string
   llmModel?: string
   embeddingModel?: string
+  temperature?: number
+  top_p?: number
+  seed?: number
 }
 
 function generateXmile(resultList: string[], cld: CLD) {
@@ -60,7 +63,16 @@ export async function generateCausalLoopDiagram(opts: SageOpts) {
 
   if (!question) throw new Error('No question provided')
 
-  const cld = new CLD(question, threshold, verbose, llmModel, embeddingModel)
+  const cld = new CLD(
+    question,
+    threshold,
+    verbose,
+    llmModel,
+    embeddingModel,
+    opts.temperature ?? 0,
+    opts.top_p ?? 1,
+    opts.seed ?? (Number(process.env.SEED) || 42)
+  )
   const response = await cld.generateCausalRelationships()
 
   // dedupe and normalize lines
