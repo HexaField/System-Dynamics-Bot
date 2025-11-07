@@ -1,129 +1,40 @@
 import axios from 'axios'
 import * as fs from 'fs'
-import * as OpenAI from 'openai'
 
 require('dotenv').config()
 
 export const RED = '\u001b[31m'
 export const RESET = '\u001b[0m'
 
-const USE_OLLAMA = Boolean(process.env.USE_OLLAMA) || Boolean(process.env.OLLAMA_URL)
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434'
 
-const openaiKey = process.env.OPENAI_API_KEY || ''
-const openaiClient = openaiKey ? new OpenAI.OpenAI({ apiKey: openaiKey }) : null
-
-export async function getCompletionFromMessages(
-  messages: any[],
-  model?: string,
-  responseFormat = false,
-  temperature = 0,
-  top_p = 1,
-  seed: number | null = Number(process.env.SEED) || 42
-) {
-  if (USE_OLLAMA) {
-    // prefer an explicit model argument first, then env var fallback
-    // Use Ollama /api/generate only (no fallbacks). This enforces we use the real model endpoint
-    // and fail fast if it's not available. Consumers must run a compatible Ollama model.
-  const chatModel = model || process.env.OLLAMA_CHAT_MODEL || 'llama3.1:8b'
-    const payload: any = { model: chatModel, messages, temperature, top_p }
-    // include seed for deterministic runs when supported by the local model
-    if (seed !== null && seed !== undefined) payload.seed = seed
-    const resp = await axios.post(`${OLLAMA_URL}/api/generate`, payload, { timeout: 120000 })
-    const data = resp.data
-    // Ollama often streams NDJSON. Handle string streaming output by parsing lines.
-    if (typeof data === 'string') {
-      const lines = data
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean)
-      const parts: string[] = []
-      for (const line of lines) {
-        try {
-          const obj = JSON.parse(line)
-          if (obj && obj.message && typeof obj.message.content === 'string') {
-            parts.push(obj.message.content)
-          } else if (obj && obj.output && typeof obj.output === 'string') {
-            parts.push(obj.output)
-          }
-        } catch (e) {
-          // ignore partial JSON parse errors
-        }
-      }
-      const joined = parts.join('')
-      if (joined) return joined
-    }
-    // Handle JSON-like shapes
-    if (data && data.choices && Array.isArray(data.choices)) {
-      const first = data.choices[0]
-      if (first && first.message && first.message.content) return first.message.content
-    }
-    if (typeof data === 'object') return JSON.stringify(data)
-    if (typeof data === 'string') return data
-    return ''
-  } else {
-    if (!openaiClient) throw new Error('OpenAI API key not set')
-    // use chat.completions.create style wrapper (openai npm v4 provides chat.completions.create)
-    const chosen = model || 'gpt-4-1106-preview'
-    const response = await openaiClient.chat.completions.create({
-      model: chosen,
-      messages,
-      temperature,
-      top_p
-    })
-    return response.choices[0].message.content
-  }
-}
-
+// getEmbedding now uses Ollama exclusively - no fallbacks
 export async function getEmbedding(text: string, model?: string) {
   const clean = text.replace(/\n/g, ' ')
-  if (USE_OLLAMA) {
-    // prefer explicit model argument first, then env var, then sensible default for Ollama
-    const embedModel = model || process.env.OLLAMA_EMBEDDING_MODEL || 'bge-m3:latest'
-    const payload = { model: embedModel, input: [clean] }
-    const resp = await axios.post(`${OLLAMA_URL}/api/embeddings`, payload, { timeout: 60000 })
+  const embedModel = model || process.env.OLLAMA_EMBEDDING_MODEL || 'bge-m3:latest'
+  const payload = { model: embedModel, input: clean }
+  
+  try {
+    const resp = await axios.post(`${OLLAMA_URL}/api/embed`, payload, { timeout: 60000 })
     const data = resp.data
-    // Common Ollama shapes:
-    // 1) { data: [{ embedding: [...] }] }
-    if (
-      data &&
-      data.data &&
-      Array.isArray(data.data) &&
-      data.data[0] &&
-      Array.isArray(data.data[0].embedding) &&
-      data.data[0].embedding.length
-    ) {
-      return data.data[0].embedding
+    
+    // Ollama /api/embed response format: { "embeddings": [[...]] }
+    if (data && Array.isArray(data.embeddings) && data.embeddings[0] && Array.isArray(data.embeddings[0])) {
+      return data.embeddings[0]
     }
-    // 2) { embedding: [...] }
-    if (data && Array.isArray(data.embedding) && data.embedding.length) {
-      return data.embedding
-    }
-    // If Ollama returned empty embeddings, fail — do not fall back to local pseudo-embeddings.
+    
+    // No fallbacks - fail immediately if embeddings not available
     throw new Error(
-      `Embeddings API returned no embedding for model ${embedModel}. Ensure the model supports embeddings and Ollama is configured correctly.`
+      `Embeddings API returned unexpected format for model ${embedModel}. Response: ${JSON.stringify(data)}. Ensure Ollama is running at ${OLLAMA_URL} and the model supports embeddings.`
     )
-  } else {
-    if (!openaiClient) throw new Error('OpenAI API key not set')
-    const chosen = model || 'text-embedding-3-small'
-    const resp = await openaiClient.embeddings.create({ model: chosen, input: [clean] })
-    return resp.data[0].embedding
+  } catch (error: any) {
+    if (error.response) {
+      throw new Error(
+        `Ollama embeddings API error (${error.response.status}): ${JSON.stringify(error.response.data)}. Ensure model ${embedModel} is installed (run: ollama pull ${embedModel}) and Ollama is running at ${OLLAMA_URL}.`
+      )
+    }
+    throw error
   }
-}
-
-function hashEmbedding(text: string, dim = 1536) {
-  // Deterministic pseudo-embedding so downstream code can compute similarities.
-  let h = 2166136261 >>> 0
-  for (let i = 0; i < text.length; i++) {
-    h = Math.imul(h ^ text.charCodeAt(i), 16777619) >>> 0
-  }
-  const vec: number[] = new Array(dim)
-  let seed = h
-  for (let i = 0; i < dim; i++) {
-    seed = (seed * 1664525 + 1013904223) >>> 0
-    vec[i] = ((seed % 1000) - 500) / 500
-  }
-  return vec
 }
 
 export function cosineSimilarity(a: number[], b: number[]) {

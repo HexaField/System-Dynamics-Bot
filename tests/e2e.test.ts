@@ -1,6 +1,9 @@
 import { expect, test } from 'vitest'
 import { generateCausalLoopDiagram } from '../src/sage'
 
+//   USE_OLLAMA=1
+//   OLLAMA_URL=http://localhost:11434
+
 // Increase timeout because real model calls can take longer
 test('end-to-end run using Ollama (real LLM)', async () => {
   // Preflight determinism check: ensure the configured Ollama model honors seed + deterministic params.
