@@ -1,4 +1,4 @@
-import CLD from './cld'
+import { generateCausalLoopDiagram as generateCLD, extractVariables } from './cld'
 import { cleanSymbol, xmileName } from './utils'
 
 type SageOpts = {
@@ -14,11 +14,11 @@ type SageOpts = {
   seed?: number
 }
 
-function generateXmile(resultList: string[], cld: CLD) {
+function generateXmile(resultList: string[]) {
   let variablesDict: Record<string, string[]> = {}
   let connectors = ''
   for (const line of resultList) {
-    const [v1, v2, symbol] = (cld as any).extractVariables(line)
+    const [v1, v2, symbol] = extractVariables(line)
     if (!v1 || !v2 || v1 === v2) continue
     if (!variablesDict[v2]) variablesDict[v2] = []
     variablesDict[v2].push(v1)
@@ -40,10 +40,10 @@ function generateXmile(resultList: string[], cld: CLD) {
   return xmile
 }
 
-function generateDot(resultList: string[], cld: CLD) {
+function generateDot(resultList: string[]) {
   let dot = 'digraph G {\n  rankdir=LR;\n  node [shape=box];\n'
   for (const line of resultList) {
-    const [v1, v2, symbol] = (cld as any).extractVariables(line)
+    const [v1, v2, symbol] = extractVariables(line)
     if (!v1 || !v2 || v1 === v2) continue
     const label = symbol || ''
     dot += `  \"${v1}\" -> \"${v2}\" [label=\"${label}\"];\n`
@@ -63,17 +63,16 @@ export async function generateCausalLoopDiagram(opts: SageOpts) {
 
   if (!question) throw new Error('No question provided')
 
-  const cld = new CLD(
+  const response = await generateCLD({
     question,
     threshold,
     verbose,
     llmModel,
     embeddingModel,
-    opts.temperature ?? 0,
-    opts.top_p ?? 1,
-    opts.seed ?? (Number(process.env.SEED) || 42)
-  )
-  const response = await cld.generateCausalRelationships()
+    temperature: opts.temperature ?? 0,
+    top_p: opts.top_p ?? 1,
+    seed: opts.seed ?? (Number(process.env.SEED) || 42)
+  })
 
   // dedupe and normalize lines
   const lines = response
@@ -122,11 +121,11 @@ export async function generateCausalLoopDiagram(opts: SageOpts) {
   }
 
   if (xmileFlag) {
-    result.xmile = generateXmile(uniqNormalized, cld)
+    result.xmile = generateXmile(uniqNormalized)
   }
 
   if (diagram) {
-    result.dot = generateDot(uniqNormalized, cld)
+    result.dot = generateDot(uniqNormalized)
   }
 
   return result

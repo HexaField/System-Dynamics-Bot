@@ -1,6 +1,30 @@
 import { callLLM } from './llm'
 import { cosineSimilarity, getEmbedding, loadJson } from './utils'
 
+type CLDOptions = {
+  question: string
+  threshold?: number
+  verbose?: boolean
+  llmModel?: string
+  embeddingModel?: string
+  temperature?: number
+  top_p?: number
+  seed?: number
+}
+
+type CLDContext = {
+  question: string
+  threshold: number
+  verbose: boolean
+  sentences: string[]
+  embeddings: number[][]
+  llmModel?: string
+  embeddingModel?: string
+  temperature: number
+  top_p: number
+  seed: number | null
+}
+
 function simpleSentenceSplit(text: string): string[] {
   // very simple sentence splitter
   return text
@@ -9,6 +33,7 @@ function simpleSentenceSplit(text: string): string[] {
     .filter(Boolean)
 }
 
+// System prompt for CLD generation
 const systemPrompt = `You are a System Dynamics Professional Modeler.
 Users will give text, and it is your job to generate causal relationships from that text.
 You will conduct a multistep process:
@@ -107,256 +132,263 @@ Corresponding JSON response:
 Please ensure that you only provide the appropriate JSON response format and nothing more. Ensure that you follow the example JSON response formats provided in the examples.
 `
 
-export class CLD {
-  question: string
-  threshold: number
-  verbose: boolean
-  sentences: string[]
-  embeddings: number[][]
-  llmModel?: string
-  embeddingModel?: string
-  temperature: number
-  top_p: number
-  seed: number | null
+// Initialize embeddings for all sentences
+async function initEmbeddings(ctx: CLDContext): Promise<void> {
+  const jobs = ctx.sentences.map((s) => getEmbedding(s, ctx.embeddingModel))
+  ctx.embeddings = (await Promise.all(jobs as any)) as number[][]
+}
 
-  constructor(
-    question: string,
-    threshold = 0.85,
-    verbose = false,
-    llmModel?: string,
-    embeddingModel?: string,
-    temperature = 0,
-    top_p = 1,
-    seed: number | null = Number(process.env.SEED) || 42
-  ) {
-    this.question = question
-    this.threshold = threshold
-    this.verbose = verbose
-    this.sentences = simpleSentenceSplit(question)
-    this.embeddings = []
-    this.llmModel = llmModel
-    this.embeddingModel = embeddingModel
-    this.temperature = temperature
-    this.top_p = top_p
-    this.seed = seed
-  }
-  async initEmbeddings() {
-    const jobs = this.sentences.map((s) => getEmbedding(s, this.embeddingModel))
-    this.embeddings = (await Promise.all(jobs as any)) as number[][]
-  }
-
-  async getLine(query: string) {
-    if (this.embeddings.length === 0) await this.initEmbeddings()
-    const qEmb = await getEmbedding(query, this.embeddingModel)
-    let best = 0
-    let idx = 0
-    for (let i = 0; i < this.embeddings.length; i++) {
-      const sim = cosineSimilarity(qEmb as number[], this.embeddings[i])
-      if (sim > best) {
-        best = sim
-        idx = i
-      }
-    }
-    return this.sentences[idx]
-  }
-
-  async generateCausalRelationships() {
-    // Mirror the original Python multi-step flow:
-    // 1) initial generation (JSON numbered dict with 'causal relationship', 'reasoning', 'relevant text')
-    // 2) follow-up to close implied loops
-    // 3) normalize and merge the two responses
-    // 4) map to tuples and return a numbered list of corrected relationships after variable checking
-
-    // Step 1: initial generation
-    const resp1 = await callLLM(systemPrompt, this.question, 'opencode', this.llmModel)
-    if (!resp1.success || !resp1.data) throw new Error('LLM failed to produce an initial response')
-    const response1 = loadJson(resp1.data)
-    if (!response1 || Object.keys(response1).length === 0) {
-      throw new Error('Input text did not have any causal relationships!')
-    }
-
-    // Step 2: ask the model to find closed loops and add extra relationships if needed
-    const loopQuery = `Find out if there are any possibilities of forming closed loops that are implied in the text. If yes, then close the loops by adding the extra relationships and provide them in a JSON format please.`
-    const resp2 = await callLLM(systemPrompt, loopQuery, 'opencode', this.llmModel)
-    const response2 = resp2.success && resp2.data ? loadJson(resp2.data) : null
-    
-    // Only merge if response2 has actual content
-    const merged: any = response2 && Object.keys(response2).length > 0 ? { ...response1, ...response2 } : response1
-
-    // Normalize merged into an object mapping like Python expected
-    const responseDict: { [k: string]: any } = merged
-
-    const lines: Array<[string, string, string]> = []
-    for (const k of Object.keys(responseDict)) {
-      const entry = responseDict[k]
-      const rel = entry['causal relationship'] || entry['relationship'] || entry['causal_relationship'] || entry['causal relationship']
-      const reasoning = entry['reasoning'] || ''
-      const relevant = entry['relevant text'] || entry['relevant_text'] || entry['relevant text'] || ''
-      // Only call getLine if relevant text is non-empty
-      const relevantTextLine = relevant ? await this.getLine(String(relevant)) : ''
-      lines.push([String(rel || '').toLowerCase(), String(reasoning || ''), String(relevantTextLine || '')])
-    }
-
-    // Step 3: check and merge similar variables via LLM-driven logic
-    const checked = await this.checkVariables(this.question, lines)
-
-    // Step 4: verify each relationship and produce final corrected lines (1-based numbering)
-    const corrected: string[] = []
-    for (let i = 0; i < checked.length; i++) {
-      const vals = checked[i]
-      const relevantTxt = vals[2]
-      const verified = await this.checkCausalRelationships(vals[0], vals[1], relevantTxt)
-      corrected.push(`${i + 1}. ${verified}`)
-    }
-    return corrected.join('\n')
-  }
-
-  async checkCausalRelationships(relationship: string, reasoning: string, relevant_txt: string) {
-    const [var1, var2] = this.extractVariables(relationship)
-    const prompt = `Relationship: ${relationship}\nRelevant Text: ${relevant_txt}\nReasoning: ${reasoning}\n\nGiven the above text, select which of the following options are correct (there may be more than one):\n1. increasing ${var1} increases ${var2}\n2. decreasing ${var1} decreases ${var2}\n3. increasing ${var1} decreases ${var2}\n4. decreasing ${var1} increases ${var2}\n\nRespond in JSON with keys 'answers' (a list of numbers) and 'reasoning'.`
-
-    const resp = await callLLM(prompt, '', 'opencode', this.llmModel)
-    if (!resp.success || !resp.data) {
-      throw new Error('LLM failed while checking causal relationship')
-    }
-    const parsed = loadJson(resp.data)
-    let steps: string[] = []
-    if (parsed && parsed.answers) {
-      try {
-        // answers could be a string like "[1,2]" or an array
-        if (Array.isArray(parsed.answers)) {
-          steps = parsed.answers.map(String)
-        } else if (typeof parsed.answers === 'string') {
-          steps = (parsed.answers.match(/\d+/g) || []).map(String)
-        }
-      } catch (e) {
-        steps = []
-      }
-    }
-    // fallback: try to extract digits from raw data
-    if (steps.length === 0) {
-      const nums = (resp.data || '').match(/\d+/g) || []
-      steps = nums
-    }
-
-    if (steps.includes('1') || steps.includes('2')) {
-      return `${var1} -->(+) ${var2}`
-    } else if (steps.includes('3') || steps.includes('4')) {
-      return `${var1} -->(-) ${var2}`
-    } else {
-      throw new Error('Unexpected answer while verifying causal relationship')
+// Get the most relevant sentence from the text based on query
+async function getLine(query: string, ctx: CLDContext): Promise<string> {
+  if (ctx.embeddings.length === 0) await initEmbeddings(ctx)
+  const qEmb = await getEmbedding(query, ctx.embeddingModel)
+  let best = 0
+  let idx = 0
+  for (let i = 0; i < ctx.embeddings.length; i++) {
+    const sim = cosineSimilarity(qEmb as number[], ctx.embeddings[i])
+    if (sim > best) {
+      best = sim
+      idx = i
     }
   }
+  return ctx.sentences[idx]
+}
 
-  async computeSimilarities(variable_to_index: { [k: string]: number }, index_to_variable: { [k: number]: string }) {
-    const names = Object.keys(variable_to_index)
-    // Use real embeddings from Ollama - no fallbacks
-    const jobs = names.map((n) => getEmbedding(n, this.embeddingModel))
-    const embeddingList = (await Promise.all(jobs)) as number[][]
-    
-    // normalize
-    const norms = embeddingList.map((v) => {
-      const mag = Math.sqrt(v.reduce((s, x) => s + x * x, 0))
-      return v.map((x) => x / (mag || 1))
+// Extract variables from a relationship string
+function extractVariables(relationship: string): [string, string, string] {
+  const parts = relationship.split('-->')
+  if (parts.length < 2) return ['', '', '']
+  let var1 = parts[0].trim().toLowerCase()
+  let right = parts[1]
+  let symbol = ''
+  let var2 = right
+    .replace(/\(\+\)|\(-\)/g, (s) => {
+      symbol = s
+      return ''
     })
-    const h = norms.length
-    const similar: Array<[string, string]> = []
-    for (let i = 0; i < h; i++) {
-      for (let j = i + 1; j < h; j++) {
-        const a = norms[i]
-        const b = norms[j]
-        let dot = 0
-        for (let k = 0; k < a.length; k++) dot += a[k] * (b[k] || 0)
-        if (dot >= this.threshold) {
-          similar.push([index_to_variable[i], index_to_variable[j]])
-        }
+    .trim()
+    .toLowerCase()
+  var1 = var1.replace(/[!.,;:]/g, '')
+  var2 = var2.replace(/[!.,;:]/g, '')
+  return [var1, var2, symbol]
+}
+
+// Check and verify a causal relationship using LLM
+async function checkCausalRelationship(
+  relationship: string,
+  reasoning: string,
+  relevant_txt: string,
+  ctx: CLDContext
+): Promise<string> {
+  const [var1, var2] = extractVariables(relationship)
+  const prompt = `Relationship: ${relationship}\nRelevant Text: ${relevant_txt}\nReasoning: ${reasoning}\n\nGiven the above text, select which of the following options are correct (there may be more than one):\n1. increasing ${var1} increases ${var2}\n2. decreasing ${var1} decreases ${var2}\n3. increasing ${var1} decreases ${var2}\n4. decreasing ${var1} increases ${var2}\n\nRespond in JSON with keys 'answers' (a list of numbers) and 'reasoning'.`
+
+  const resp = await callLLM(prompt, '', 'opencode', ctx.llmModel)
+  if (!resp.success || !resp.data) {
+    throw new Error('LLM failed while checking causal relationship')
+  }
+  const parsed = loadJson(resp.data)
+  let steps: string[] = []
+  if (parsed && parsed.answers) {
+    try {
+      if (Array.isArray(parsed.answers)) {
+        steps = parsed.answers.map(String)
+      } else if (typeof parsed.answers === 'string') {
+        steps = (parsed.answers.match(/\d+/g) || []).map(String)
       }
+    } catch (e) {
+      steps = []
     }
-    if (similar.length === 0) return null
-    // convert to unique sorted tuples like Python
-    const groups = similar.map((g) => g.sort().join('||'))
-    const uniq = Array.from(new Set(groups)).map((s) => s.split('||'))
-    return uniq as string[][]
+  }
+  if (steps.length === 0) {
+    const nums = (resp.data || '').match(/\d+/g) || []
+    steps = nums
   }
 
-  async checkVariables(text: string, lines: Array<[string, string, string]>) {
-    const result_list = lines.map((l) => l[0])
-    const reasoning_list = lines.map((l) => l[1])
-    const rel_txt_list = lines.map((l) => l[2])
-    // collect variables
-    const variable_set = new Set<string>()
-    for (const line of result_list) {
-      const [v1, v2] = this.extractVariables(line)
-      if (v1) variable_set.add(v1)
-      if (v2) variable_set.add(v2)
-    }
-    const variable_list = Array.from(variable_set)
-    const variable_to_index: { [k: string]: number } = {}
-    const index_to_variable: { [k: number]: string } = {}
-    for (let i = 0; i < variable_list.length; i++) {
-      variable_to_index[variable_list[i]] = i
-      index_to_variable[i] = variable_list[i]
-    }
-
-    const similar_variables = await this.computeSimilarities(variable_to_index, index_to_variable)
-    if (!similar_variables) return lines
-
-    // Prepare merge prompt (mirror Python system prompt)
-    const mergeSystem = `You are a Professional System Dynamics Modeler.\nYou will be provided with: Text, Relationships, and Similar Variables. Merge similar variable names choosing the shorter name, update relationships, and return JSON as in the examples.`
-    const prompt = `Text:\n${text}\nRelationships:\n${JSON.stringify(lines)}\nSimilar Variables:\n${JSON.stringify(similar_variables)}`
-    const resp = await callLLM(mergeSystem, prompt, 'opencode', this.llmModel)
-    if (!resp.success || !resp.data) throw new Error('LLM failed while merging similar variables')
-    const parsed = loadJson(resp.data)
-    if (!parsed) throw new Error('Got no corrected response from the assistant')
-
-    let relationships: any[] = []
-    if (parsed['Step 2'] && parsed['Step 2']['Final Relationships']) {
-      relationships = parsed['Step 2']['Final Relationships']
-    } else {
-      // try to flatten numbered dict like Python
-      try {
-        const keys = Object.keys(parsed).sort((a, b) => {
-          const na = a.match(/\d+/)?.[0]
-          const nb = b.match(/\d+/)?.[0]
-          return Number(na || a) - Number(nb || b)
-        })
-        for (const k of keys) {
-          const entry = parsed[k]
-          const rel = entry['causal relationship'] || entry['relationship'] || entry['causal_relationship'] || entry['causal relationship']
-          const reasoning = entry['reasoning'] || ''
-          const relevant = entry['relevant text'] || entry['relevant_text'] || ''
-          relationships.push({ relationship: rel, reasoning, 'relevant text': relevant })
-        }
-      } catch (e) {
-        throw new Error('Could not normalize merged response')
-      }
-    }
-
-    const new_lines: Array<[string, string, string]> = []
-    for (const r of relationships) {
-      const relevantTxt = await this.getLine(String(r['relevant text'] || ''))
-      new_lines.push([String((r['relationship'] || r['causal relationship'] || '').toLowerCase()), String(r['reasoning'] || ''), relevantTxt])
-    }
-    return new_lines
-  }
-
-  extractVariables(relationship: string) {
-    const parts = relationship.split('-->')
-    if (parts.length < 2) return ['', '', '']
-    let var1 = parts[0].trim().toLowerCase()
-    let right = parts[1]
-    let symbol = ''
-    let var2 = right
-      .replace(/\(\+\)|\(-\)/g, (s) => {
-        symbol = s
-        return ''
-      })
-      .trim()
-      .toLowerCase()
-    var1 = var1.replace(/[!.,;:]/g, '')
-    var2 = var2.replace(/[!.,;:]/g, '')
-    return [var1, var2, symbol]
+  if (steps.includes('1') || steps.includes('2')) {
+    return `${var1} -->(+) ${var2}`
+  } else if (steps.includes('3') || steps.includes('4')) {
+    return `${var1} -->(-) ${var2}`
+  } else {
+    throw new Error('Unexpected answer while verifying causal relationship')
   }
 }
 
-export default CLD
+// Compute similarity matrix for variables
+async function computeSimilarities(
+  variable_to_index: { [k: string]: number },
+  index_to_variable: { [k: number]: string },
+  ctx: CLDContext
+): Promise<string[][] | null> {
+  const names = Object.keys(variable_to_index)
+  const jobs = names.map((n) => getEmbedding(n, ctx.embeddingModel))
+  const embeddingList = (await Promise.all(jobs)) as number[][]
+
+  const norms = embeddingList.map((v) => {
+    const mag = Math.sqrt(v.reduce((s, x) => s + x * x, 0))
+    return v.map((x) => x / (mag || 1))
+  })
+  const h = norms.length
+  const similar: Array<[string, string]> = []
+  for (let i = 0; i < h; i++) {
+    for (let j = i + 1; j < h; j++) {
+      const a = norms[i]
+      const b = norms[j]
+      let dot = 0
+      for (let k = 0; k < a.length; k++) dot += a[k] * (b[k] || 0)
+      if (dot >= ctx.threshold) {
+        similar.push([index_to_variable[i], index_to_variable[j]])
+      }
+    }
+  }
+  if (similar.length === 0) return null
+  const groups = similar.map((g) => g.sort().join('||'))
+  const uniq = Array.from(new Set(groups)).map((s) => s.split('||'))
+  return uniq as string[][]
+}
+
+// Check and merge similar variables
+async function checkVariables(
+  text: string,
+  lines: Array<[string, string, string]>,
+  ctx: CLDContext
+): Promise<Array<[string, string, string]>> {
+  const result_list = lines.map((l) => l[0])
+  const variable_set = new Set<string>()
+  for (const line of result_list) {
+    const [v1, v2] = extractVariables(line)
+    if (v1) variable_set.add(v1)
+    if (v2) variable_set.add(v2)
+  }
+  const variable_list = Array.from(variable_set)
+  const variable_to_index: { [k: string]: number } = {}
+  const index_to_variable: { [k: number]: string } = {}
+  for (let i = 0; i < variable_list.length; i++) {
+    variable_to_index[variable_list[i]] = i
+    index_to_variable[i] = variable_list[i]
+  }
+
+  const similar_variables = await computeSimilarities(variable_to_index, index_to_variable, ctx)
+  if (!similar_variables) return lines
+
+  const mergeSystem = `You are a Professional System Dynamics Modeler.\nYou will be provided with: Text, Relationships, and Similar Variables. Merge similar variable names choosing the shorter name, update relationships, and return JSON as in the examples.`
+  const prompt = `Text:\n${text}\nRelationships:\n${JSON.stringify(lines)}\nSimilar Variables:\n${JSON.stringify(similar_variables)}`
+  const resp = await callLLM(mergeSystem, prompt, 'opencode', ctx.llmModel)
+  if (!resp.success || !resp.data) throw new Error('LLM failed while merging similar variables')
+  const parsed = loadJson(resp.data)
+  if (!parsed) throw new Error('Got no corrected response from the assistant')
+
+  let relationships: any[] = []
+  if (parsed['Step 2'] && parsed['Step 2']['Final Relationships']) {
+    relationships = parsed['Step 2']['Final Relationships']
+  } else {
+    try {
+      const keys = Object.keys(parsed).sort((a, b) => {
+        const na = a.match(/\d+/)?.[0]
+        const nb = b.match(/\d+/)?.[0]
+        return Number(na || a) - Number(nb || b)
+      })
+      for (const k of keys) {
+        const entry = parsed[k]
+        const rel =
+          entry['causal relationship'] ||
+          entry['relationship'] ||
+          entry['causal_relationship'] ||
+          entry['causal relationship']
+        const reasoning = entry['reasoning'] || ''
+        const relevant = entry['relevant text'] || entry['relevant_text'] || ''
+        relationships.push({ relationship: rel, reasoning, 'relevant text': relevant })
+      }
+    } catch (e) {
+      throw new Error('Could not normalize merged response')
+    }
+  }
+
+  const new_lines: Array<[string, string, string]> = []
+  for (const r of relationships) {
+    const rel = String((r['relationship'] || r['causal relationship'] || '').toLowerCase())
+    // Skip empty relationships
+    if (!rel || rel.trim() === '') continue
+
+    const relevantText = String(r['relevant text'] || '')
+    const relevantTxt = relevantText ? await getLine(relevantText, ctx) : ''
+    new_lines.push([rel, String(r['reasoning'] || ''), relevantTxt])
+  }
+  return new_lines
+}
+
+// Main function to generate causal relationships
+async function generateCausalRelationships(ctx: CLDContext): Promise<string> {
+  // Step 1: initial generation
+  const resp1 = await callLLM(systemPrompt, ctx.question, 'opencode', ctx.llmModel)
+  if (!resp1.success || !resp1.data) throw new Error('LLM failed to produce an initial response')
+  const response1 = loadJson(resp1.data)
+  if (!response1 || Object.keys(response1).length === 0) {
+    throw new Error('Input text did not have any causal relationships!')
+  }
+
+  // Step 2: ask the model to find closed loops and add extra relationships if needed
+  // Provide the initial response as context for the loop-closure query
+  const loopQuery = `Initial relationships found:\n${JSON.stringify(response1, null, 2)}\n\nFind out if there are any possibilities of forming closed loops that are implied in the text. If yes, then close the loops by adding the extra relationships and provide them in a JSON format please.`
+  const resp2 = await callLLM(systemPrompt, loopQuery, 'opencode', ctx.llmModel)
+  const response2 = resp2.success && resp2.data ? loadJson(resp2.data) : null
+
+  // Only merge if response2 has actual content
+  const merged: any = response2 && Object.keys(response2).length > 0 ? { ...response1, ...response2 } : response1
+
+  // Normalize merged into an object mapping like Python expected
+  const responseDict: { [k: string]: any } = merged
+
+  const lines: Array<[string, string, string]> = []
+  for (const k of Object.keys(responseDict)) {
+    const entry = responseDict[k]
+    const rel =
+      entry['causal relationship'] ||
+      entry['relationship'] ||
+      entry['causal_relationship'] ||
+      entry['causal relationship']
+    const reasoning = entry['reasoning'] || ''
+    const relevant = entry['relevant text'] || entry['relevant_text'] || entry['relevant text'] || ''
+
+    // Skip entries with no relationship
+    if (!rel || String(rel).trim() === '') continue
+
+    // Only call getLine if relevant text is non-empty
+    const relevantTextLine = relevant ? await getLine(String(relevant), ctx) : ''
+    lines.push([String(rel || '').toLowerCase(), String(reasoning || ''), String(relevantTextLine || '')])
+  }
+
+  // Step 3: check and merge similar variables via LLM-driven logic
+  const checked = await checkVariables(ctx.question, lines, ctx)
+
+  // Step 4: verify each relationship and produce final corrected lines (1-based numbering)
+  const corrected: string[] = []
+  for (let i = 0; i < checked.length; i++) {
+    const vals = checked[i]
+    const relevantTxt = vals[2]
+    const verified = await checkCausalRelationship(vals[0], vals[1], relevantTxt, ctx)
+    corrected.push(`${i + 1}. ${verified}`)
+  }
+  return corrected.join('\n')
+}
+
+// Main exported function - functional API
+export async function generateCausalLoopDiagram(opts: CLDOptions): Promise<string> {
+  const ctx: CLDContext = {
+    question: opts.question,
+    threshold: opts.threshold ?? 0.85,
+    verbose: opts.verbose ?? false,
+    sentences: simpleSentenceSplit(opts.question),
+    embeddings: [],
+    llmModel: opts.llmModel,
+    embeddingModel: opts.embeddingModel,
+    temperature: opts.temperature ?? 0,
+    top_p: opts.top_p ?? 1,
+    seed: opts.seed ?? (Number(process.env.SEED) || 42)
+  }
+
+  return generateCausalRelationships(ctx)
+}
+
+// Export helper function for extracting variables (used by sage.ts)
+export { extractVariables }
