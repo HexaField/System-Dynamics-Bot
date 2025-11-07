@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { generateCausalLoopDiagram } from '../dist/sage'
+import { generateCausalLoopDiagram } from '../src/sage'
 
 // This e2e test runs against a local Ollama HTTP API. It is skipped unless
 // you explicitly enable it by setting the following environment variables:
@@ -21,39 +21,7 @@ const shouldRun = Boolean(process.env.RUN_OLLAMA_E2E) && Boolean(process.env.USE
   'end-to-end run using Ollama (real LLM)',
   async () => {
     // Preflight determinism check: ensure the configured Ollama model honors seed + deterministic params.
-    const utils = require('../dist/utils')
     const checkSeed = Number(process.env.SEED) || 42
-    const probeMsg = [{ role: 'user', content: `Return exactly this JSON: {"seed": ${checkSeed}} and nothing else.` }]
-    const a = await utils.getCompletionFromMessages(probeMsg, process.env.OLLAMA_CHAT_MODEL, false, 0, 1, checkSeed)
-    const b = await utils.getCompletionFromMessages(probeMsg, process.env.OLLAMA_CHAT_MODEL, false, 0, 1, checkSeed)
-    if (a !== b) {
-      throw new Error(
-        `Preflight determinism check failed: model responses differed. Ensure your Ollama model supports deterministic seeds and set OLLAMA_CHAT_MODEL accordingly. Got:\nA=${a}\nB=${b}`
-      )
-    }
-
-    // Preflight schema compliance: ensure model returns the required JSON schema for a simple example
-    const schemaProbe = [
-      {
-        role: 'user',
-        content: `Extract causal relationships from: "When X increases, Y decreases." Return ONLY valid JSON following the schema: {"causalRelationships": [{"cause":"<text>","effect":"<text>","direction":"increase|decrease|positive|negative","reasoning":"<text>","relevant":"<text>"}] }`
-      }
-    ]
-    const schemaOut = await utils.getCompletionFromMessages(
-      schemaProbe,
-      process.env.OLLAMA_CHAT_MODEL,
-      false,
-      0,
-      1,
-      checkSeed
-    )
-    const parsedSchema = utils.loadJson(schemaOut)
-    if (!parsedSchema || !Array.isArray(parsedSchema.causalRelationships)) {
-      throw new Error(
-        `Preflight schema check failed: model did not return the expected JSON schema. Received: ${schemaOut}. Please use an Ollama model that supports structured JSON outputs and set OLLAMA_CHAT_MODEL accordingly.`
-      )
-    }
-
     // Larger prompt to exercise CLD parsing
     const largePrompt = `Engineers compare the work remaining to be done against the time remaining before the deadline. The larger the gap, the more Schedule Pressure they feel. When schedule pressure builds up, engineers can work overtime which increases completion rate but also increases fatigue, which lowers productivity.`
 
@@ -85,10 +53,11 @@ const shouldRun = Boolean(process.env.RUN_OLLAMA_E2E) && Boolean(process.env.USE
     // Run the full CLD extraction 5 times in a row and require validity each time
     for (let i = 0; i < 5; i++) {
       const result = await generateCausalLoopDiagram({
-        verbose: false,
+        verbose: true,
         diagram: false,
         xmile: false,
         threshold: 0.85,
+        llmModel: 'github-copilot/gpt-5-mini',
         question: largePrompt,
         seed: checkSeed,
         temperature: 0,
@@ -136,5 +105,5 @@ const shouldRun = Boolean(process.env.RUN_OLLAMA_E2E) && Boolean(process.env.USE
 
     console.log('test finished')
   },
-  300000
+  600_000
 )

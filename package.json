@@ -23,6 +23,7 @@
     "commander": "^14.0.2",
     "dotenv": "^17.2.3",
     "inquirer": "^12.10.0",
+    "ollama": "^0.6.2",
     "openai": "^6.8.0"
   },
   "devDependencies": {

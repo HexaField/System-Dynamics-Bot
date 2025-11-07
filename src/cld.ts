@@ -1,4 +1,5 @@
-import { cosineSimilarity, getCompletionFromMessages, getEmbedding, loadJson } from './utils'
+import { callLLM } from './llm'
+import { cosineSimilarity, getEmbedding, loadJson } from './utils'
 
 function simpleSentenceSplit(text: string): string[] {
   // very simple sentence splitter
@@ -14,7 +15,7 @@ You will conduct a multi-step process:
 
 1. Identify variables (entities) that participate in cause-effect relationships. Name variables concisely (no more than 2 words), avoid sentiment (neutral names), and minimize the number of unique variables by preferring canonical/shorter names when synonyms appear.
 
-2. Represent each causal relationship as an object with subject, predicate, and object, plus your reasoning and the most relevant supporting text snippet. Use ONLY these predicate values:
+2. Represent each causal relationship as an object with subject, predicate, and object. Use ONLY these predicate values:
    - positive: subject and object move in the same direction (↑subject -> ↑object, ↓subject -> ↓object)
    - negative: subject and object move in opposite directions (↑subject -> ↓object, ↓subject -> ↑object)
    - increase: subject causes object to increase (directional effect)
@@ -30,9 +31,7 @@ OUTPUT FORMAT (return ONLY JSON, nothing else):
     {
       "subject": "<variable>",
       "predicate": "increase|decrease|positive|negative",
-      "object": "<variable>",
-      "reasoning": "<your concise reasoning for this relationship>",
-      "relevant": "<the exact sentence/paragraph that highlights this relationship>"
+      "object": "<variable>"
     }
   ]
 }
@@ -46,9 +45,7 @@ Example 1 JSON response:
     {
       "subject": "death rate",
       "predicate": "negative",
-      "object": "population",
-      "reasoning": "An increase in death rate leads to a decrease in population (opposite directions).",
-      "relevant": "when death rate goes up, population decreases"
+      "object": "population"
     }
   ]
 }
@@ -62,9 +59,7 @@ Example 2 JSON response:
     {
       "subject": "death rate",
       "predicate": "negative",
-      "object": "population",
-      "reasoning": "A decrease in death rate leads to an increase in population (opposite directions).",
-      "relevant": "lower death rate increases population"
+      "object": "population"
     }
   ]
 }
@@ -75,12 +70,12 @@ Example 3 input:
 Example 3 JSON response (truncated):
 {
   "causalRelationships": [
-    {"subject": "work remaining", "predicate": "positive", "object": "schedule pressure", "reasoning": "Larger gap means more schedule pressure.", "relevant": "The larger the gap, the more Schedule Pressure they feel."},
-    {"subject": "time remaining", "predicate": "negative", "object": "schedule pressure", "reasoning": "More time remaining reduces schedule pressure.", "relevant": "compare the work remaining ... against the time remaining ... The larger the gap, the more Schedule Pressure"},
-    {"subject": "schedule pressure", "predicate": "increase", "object": "overtime", "reasoning": "Pressure leads engineers to work overtime.", "relevant": "When schedule pressure builds up, engineers can work overtime."},
-    {"subject": "overtime", "predicate": "increase", "object": "completion rate", "reasoning": "Working more hours increases completion rate.", "relevant": "Overtime raises completion rate"},
-    {"subject": "overtime", "predicate": "increase", "object": "fatigue", "reasoning": "Working long hours increases fatigue.", "relevant": "overtime ... increases fatigue"},
-    {"subject": "fatigue", "predicate": "decrease", "object": "productivity", "reasoning": "Fatigue lowers productivity.", "relevant": "fatigue ... lowers productivity"}
+    {"subject": "work remaining", "predicate": "positive", "object": "schedule pressure"},
+    {"subject": "time remaining", "predicate": "negative", "object": "schedule pressure"},
+    {"subject": "schedule pressure", "predicate": "increase", "object": "overtime"},
+    {"subject": "overtime", "predicate": "increase", "object": "completion rate"},
+    {"subject": "overtime", "predicate": "increase", "object": "fatigue"},
+    {"subject": "fatigue", "predicate": "decrease", "object": "productivity"}
   ]
 }
 
@@ -169,37 +164,32 @@ export class CLD {
     return groups.map((g) => Array.from(g))
   }
 
-  async checkCausalRelationships(relationship: string, reasoning: string, relevantText: string) {
+  async checkCausalRelationships(relationship: string) {
     // replicate Python prompt for verification: choose among options 1-4 and return JSON
     const parts = relationship
     const varParts = parts.split('-->')
     const var1 = (varParts[0] || '').trim()
     const var2 = (varParts[1] || '').replace(/\(\+\)|\(-\)/g, '').trim()
-    const prompt = `Relationship: ${relationship}\nRelevant Text: ${relevantText}\nReasoning: ${reasoning}`
-    const system = `Given the above text, select the options which are correct. There can be more than one option that is correct:\n1. increasing ${var1} increases ${var2}\n2. decreasing ${var1} decreases ${var2}\n3. increasing ${var1} decreases ${var2}\n4. decreasing ${var1} increases ${var2}\nRespond in JSON: {"answers":"[1,2,3,or 4 depending on your reasoning]","reasoning":"<text>"}`
-    const context: any[] = [
-      { role: 'system', content: system },
-      { role: 'user', content: prompt }
-    ]
-    const raw = await getCompletionFromMessages(context, this.llmModel, false, this.temperature, this.top_p, this.seed)
-    let parsed: any = loadJson(raw)
+    const prompt = `Relationship: ${relationship}`
+    const system = `Given the above relationship, select the options which are correct. There can be more than one option that is correct:\n1. increasing ${var1} increases ${var2}\n2. decreasing ${var1} decreases ${var2}\n3. increasing ${var1} decreases ${var2}\n4. decreasing ${var1} increases ${var2}\nRespond in JSON with a key 'answers' that is a list of the correct option numbers.`
+    const raw = await callLLM(system, prompt, 'opencode', this.llmModel)
+    let parsed: any = loadJson(raw.data!)
+    // if (this.verbose) {
+    console.log('DEBUG_VERIFICATION_RESPONSE:', raw.data!)
+    // }
     let steps: string[] = []
-    let reasoningText = ''
     if (!parsed || !parsed.answers) {
       // try to extract digit answers directly from text
-      const m1 = raw.match(/\[?\s*([1-4](?:\s*,\s*[1-4])*)\s*\]?/)
-      const matchDigits = raw.match(/[1-4]/g)
+      const m1 = raw.data!.match(/\[?\s*([1-4](?:\s*,\s*[1-4])*)\s*\]?/)
+      const matchDigits = raw.data!.match(/[1-4]/g)
       if (m1 && m1[1]) {
         steps = (m1[1].match(/[1-4]/g) || []).map(String)
       } else if (matchDigits) {
         steps = matchDigits.map(String)
       }
-      const mReason = raw.match(/reasoning\s*[:\-]*\s*(.+)/i)
-      reasoningText = mReason ? mReason[1].trim() : ''
     } else {
       try {
         steps = ('' + parsed.answers).match(/[1-4]/g) || []
-        reasoningText = parsed.reasoning || ''
       } catch (e) {
         steps = []
       }
@@ -211,8 +201,8 @@ export class CLD {
     } else if (steps.includes('3') || steps.includes('4')) {
       correct = `${var1} -->(-) ${var2}`
     } else {
-      // Try heuristic: look for polarity words in reasoning or relevantText or relationship
-      const textToInspect = (reasoningText || '') + ' ' + (relevantText || '') + ' ' + (relationship || '')
+      // Try heuristic: look for polarity words in the relationship
+      const textToInspect = relationship || ''
       const lower = textToInspect.toLowerCase()
       const positiveWords = [
         'increase',
@@ -251,17 +241,16 @@ export class CLD {
       } else if (negFound && !posFound) {
         correct = `${var1} -->(-) ${var2}`
       } else {
-        // As a last resort, default to positive polarity but mark it explicit
+        // As a last resort, default to positive polarity
         correct = `${var1} -->(+) ${var2}`
       }
     }
     return correct
   }
 
-  async checkVariables(text: string, lines: Array<[string, string, string]>) {
+  async checkVariables(text: string, lines: Array<[string, string]>) {
+    // lines are [relationship, snippet]
     const result_list = lines.map((l) => l[0])
-    const reasoning_list = lines.map((l) => l[1])
-    const rel_txt_list = lines.map((l) => l[2])
     // collect unique variable names
     const variableSet = new Set<string>()
     for (const line of result_list) {
@@ -290,30 +279,18 @@ export class CLD {
     const interactive = Boolean(process.stdin && (process.stdin as any).isTTY)
     if (interactive) {
       // For simplicity in TS CLI, we default to merging all groups unless the user explicitly opts out.
-      // Implementing full interactive selection is possible but outside test automation needs.
     }
 
-    // Build system prompt for merging (same as Python check_variables prompt)
-    const mergeSystem = `You are a Professional System Dynamics Modeler.\nYou will be provided with 3 things:\n1. Multiple causal relationships between variables in a numbered list.\n2. The text on which the above causal relationships are based.\n3. Multiple tuples of two variable names which the user believes are similar.\nYour objective is to merge the two variable names into one variable, choosing a new variable name that is shorter of the two.\nFollow the steps in the example and return JSON as described.`
-    const prompt = `Text:\n${text}\nRelationships:\n${JSON.stringify(lines)}\nSimilar Variables:\n${JSON.stringify(similar_variables)}`
-    const context: any[] = [
-      { role: 'system', content: mergeSystem },
-      { role: 'user', content: prompt }
-    ]
-    const corrected_raw = await getCompletionFromMessages(
-      context,
-      this.llmModel,
-      false,
-      this.temperature,
-      this.top_p,
-      this.seed
-    )
+    const mergeSystem = `You are a Professional System Dynamics Modeler.\nYou will be provided with 3 things:\n1. Multiple causal relationships between variables in a numbered list.\n2. The text on which the above causal relationships are based.\n3. Multiple tuples of two variable names which the user believes are similar.\nYour objective is to merge the two variable names into one variable, choosing a new variable name that is shorter of the two.\nReturn JSON containing the merged relationships (only the relationship strings).`
+    const prompt = `Text:\n${text}\nRelationships:\n${JSON.stringify(result_list)}\nSimilar Variables:\n${JSON.stringify(similar_variables)}`
+
+    const corrected_raw = await callLLM(mergeSystem, prompt, 'opencode', this.llmModel)
     if (this.verbose) {
       try {
-        console.log('DEBUG_RAW_CORRECTED_RESPONSE:', corrected_raw)
+        console.log('DEBUG_RAW_CORRECTED_RESPONSE:', corrected_raw.data)
       } catch (e) {}
     }
-    let corrected_json = loadJson(corrected_raw)
+    let corrected_json = loadJson(corrected_raw.data!)
     if (!corrected_json) {
       throw new Error('Got no corrected response from the assistant during variable merging')
     }
@@ -332,22 +309,14 @@ export class CLD {
         const entry = corrected_json[k]
         const rel =
           entry['causal relationship'] || entry['relationship'] || entry['causal_relationship'] || entry['relationship']
-        const reasoning = entry['reasoning'] || ''
-        const relevant = entry['relevant text'] || entry['relevant_text'] || entry['relevantText'] || ''
-        relationships.push({
-          relationship: typeof rel === 'string' ? rel : String(rel),
-          'relevant text': relevant,
-          reasoning
-        })
+        relationships.push({ relationship: typeof rel === 'string' ? rel : String(rel) })
       }
     }
-    const new_lines: Array<[string, string, string]> = []
+    const new_lines: Array<[string, string]> = []
     for (const ent of relationships) {
       const rel = (ent['relationship'] || ent['causal relationship'] || '').toString().toLowerCase()
-      const reason = ent['reasoning'] || ''
-      const relevant = ent['relevant text'] || ent['relevant'] || ''
-      const snippet = await this.getLine(relevant || text)
-      new_lines.push([rel, reason, snippet])
+      const snippet = await this.getLine(text)
+      new_lines.push([rel, snippet])
     }
     return new_lines
   }
@@ -384,16 +353,11 @@ export class CLD {
       { role: 'system', content: systemPrompt },
       { role: 'user', content: this.question }
     ]
+    console.log('Generating causal relationships with CLD model...')
     // deterministic defaults: temperature=0, top_p=1, seed from env or 42
-    const response1 = await getCompletionFromMessages(
-      context,
-      this.llmModel,
-      false,
-      this.temperature,
-      this.top_p,
-      this.seed
-    )
-    let parsed1 = loadJson(response1 as string)
+    const response1 = await callLLM(systemPrompt, this.question, 'opencode', this.llmModel)
+    console.log('DEBUG_GENERATION_RESPONSE:', response1.data)
+    let parsed1 = loadJson(response1.data!)
     if (!parsed1) {
       throw new Error('Input text did not have any causal relationships')
     }
@@ -444,25 +408,17 @@ export class CLD {
     if (malformed()) {
       const reformatPrompt = `You previously returned this output: ${JSON.stringify(
         response1
-      )}\n\nPlease convert that output EXACTLY into this JSON schema: { "causalRelationships": [{"subject":"<text>","predicate":"increase|decrease|positive|negative","object":"<text>","reasoning":"<text>","relevant":"<text>"}] } and return ONLY the JSON.\nConstraints:\n- subject and object MUST be non-empty strings (<= 2 words, neutral).\n- predicate MUST be exactly one of: increase, decrease, positive, negative.\n- If no valid relationships exist, return {"causalRelationships": []}.`
-      const reformatted = await getCompletionFromMessages(
-        [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: reformatPrompt }
-        ],
-        this.llmModel,
-        false,
-        this.temperature,
-        this.top_p,
-        this.seed
-      )
-      const parsedRe = loadJson(reformatted as string)
+      )}\n\nPlease convert that output EXACTLY into this JSON schema: { "causalRelationships": [{"subject":"<text>","predicate":"increase|decrease|positive|negative","object":"<text>"}] } and return ONLY the JSON.\nConstraints:\n- subject and object MUST be non-empty strings (<= 2 words, neutral).\n- predicate MUST be exactly one of: increase, decrease, positive, negative.\n- If no valid relationships exist, return {"causalRelationships": []}.`
+      const reformatted = await callLLM(systemPrompt, reformatPrompt, 'opencode', this.llmModel)
+      console.log('reformatted:', reformatted.data)
+      const parsedRe = loadJson(reformatted.data!)
       if (parsedRe && (parsedRe as any).causalRelationships && isStructuredValid(parsedRe)) {
         parsed1 = parsedRe
       } else {
         throw new Error('Assistant returned malformed causalRelationships after reformat request')
       }
     }
+    console.log(parsed1)
     // Normalize object with array under common keys, e.g., { causalRelationships: [...] }
     if (
       parsed1 &&
@@ -487,9 +443,7 @@ export class CLD {
         const oobj = humanize(object)
         const causal = `${ssub} -->${symbol} ${oobj}`.trim()
         obj[(idx + 1).toString()] = {
-          reasoning: entry.reasoning || '',
-          'causal relationship': causal,
-          'relevant text': entry.relevant || this.question
+          'causal relationship': causal
         }
       })
       parsed1 = obj
@@ -520,9 +474,7 @@ export class CLD {
             effect = humanize(effect)
             const causal = `${cause} -->${symbol} ${effect}`.trim()
             obj[(idx + 1).toString()] = {
-              reasoning: entry.reasoning || '',
-              'causal relationship': causal,
-              'relevant text': entry.relevant || this.question
+              'causal relationship': causal
             }
           })
           parsed1 = obj
